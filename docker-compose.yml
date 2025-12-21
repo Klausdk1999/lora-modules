@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  platformio-dev:
+    image: platformio/platformio-core:latest
+    container_name: platformio-lora-dev
+    volumes:
+      - .:/workspace
+      - platformio-data:/root/.platformio
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    # Map USB devices (Linux/WSL only)
+    # For Windows, use WSL or native PlatformIO
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/ttyACM0:/dev/ttyACM0
+    environment:
+      - PLATFORMIO_CORE_DIR=/root/.platformio
+    command: /bin/bash
+
+  chirpstack:
+    image: chirpstack/chirpstack:latest
+    container_name: chirpstack-server
+    ports:
+      - "8080:8080"  # Web interface
+      - "1700:1700/udp"  # LoRaWAN Gateway Server
+      - "1883:1883"  # MQTT
+    environment:
+      - POSTGRES_DSN=postgres://chirpstack:chirpstack@postgres:5432/chirpstack?sslmode=disable
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - chirpstack-data:/etc/chirpstack
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: chirpstack-postgres
+    environment:
+      - POSTGRES_USER=chirpstack
+      - POSTGRES_PASSWORD=chirpstack
+      - POSTGRES_DB=chirpstack
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: chirpstack-redis
+    volumes:
+      - redis-data:/data
+
+volumes:
+  platformio-data:
+  chirpstack-data:
+  postgres-data:
+  redis-data:
+
