@@ -149,3 +149,6 @@ Most ESP32 boards have built-in pull-up resistors on I2C lines. If you experienc
 - [ESP32 Pin Reference](https://randomnerdtutorials.com/esp32-pinout-reference-gpios/)
 - [I2C Protocol Guide](https://www.i2c-bus.org/)
 
+
+
+

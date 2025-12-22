@@ -10,10 +10,12 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <TFLI2C.h>
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
+
+// Use the sensor library - change this to use different sensors
+#include "Sensors.h"
 
 // ============================================================================
 // LoRaWAN Configuration
@@ -38,11 +40,38 @@ void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
 // ============================================================================
 // Sensor Configuration
 // ============================================================================
-TFLI2C tflI2C;
-int16_t tfDist = 0;           // Distance in centimeters
-int16_t tfFlux = 0;           // Signal strength
-int16_t tfTemp = 0;           // Temperature
-uint8_t tfAddr = TFL_DEF_ADR; // Default I2C address: 0x10
+// Choose your sensor by uncommenting one of the following:
+#define USE_TF_LUNA      // Benewake TF-Luna (I2C)
+// #define USE_TF02_PRO   // Benewake TF02-Pro (UART on Serial2)
+// #define USE_HCSR04     // HC-SR04 ultrasonic (GPIO 4, 5)
+// #define USE_AJSR04M    // AJ-SR04M waterproof ultrasonic (GPIO 4, 5)
+// #define USE_JSNSR04T   // JSN-SR04T waterproof ultrasonic (GPIO 4, 5)
+
+// Ultrasonic sensor pins (if using ultrasonic)
+#define ULTRASONIC_TRIG_PIN   4
+#define ULTRASONIC_ECHO_PIN   5
+
+// TF02-Pro UART pins (if using TF02-Pro)
+#define TF02_RX_PIN   17
+#define TF02_TX_PIN   16
+
+// Create sensor instance based on selection
+#ifdef USE_TF_LUNA
+    TFLuna distanceSensor;
+#elif defined(USE_TF02_PRO)
+    TF02Pro distanceSensor(Serial2, TF02_RX_PIN, TF02_TX_PIN);
+#elif defined(USE_HCSR04)
+    HCSR04 distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
+#elif defined(USE_AJSR04M)
+    AJSR04M distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
+#elif defined(USE_JSNSR04T)
+    JSNSR04T distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
+#else
+    #error "Please define a sensor type (USE_TF_LUNA, USE_TF02_PRO, etc.)"
+#endif
+
+// Store last reading
+SensorReading lastReading;
 
 // ============================================================================
 // Timing Configuration
@@ -84,7 +113,8 @@ const lmic_pinmap lmic_pins = {
 void readSensor();
 void prepareDataPacket();
 void sendData();
-void onEvent (ev_t ev);
+void onEvent(ev_t ev);
+void do_send(osjob_t* j);
 
 // ============================================================================
 // Setup
@@ -95,15 +125,23 @@ void setup() {
   Serial.println(F("Heltec WiFi LoRa 32 V2 - River Level Monitor"));
   Serial.println(F("Initializing..."));
 
-  // Initialize I2C for TF-Luna
+  // Initialize I2C (for I2C sensors)
   Wire.begin();
   delay(100);
   
-  // Test TF-Luna connection
-  if (tflI2C.getData(tfDist, tfAddr)) {
-    Serial.println(F("TF-Luna sensor detected!"));
+  // Initialize the sensor
+  Serial.print(F("Initializing sensor: "));
+  Serial.println(distanceSensor.getName());
+  
+  if (distanceSensor.begin()) {
+    Serial.println(F("Sensor detected and initialized!"));
+    Serial.print(F("  Range: "));
+    Serial.print(distanceSensor.getMinDistance());
+    Serial.print(F(" - "));
+    Serial.print(distanceSensor.getMaxDistance());
+    Serial.println(F(" cm"));
   } else {
-    Serial.println(F("WARNING: TF-Luna sensor not detected!"));
+    Serial.println(F("WARNING: Sensor not detected!"));
   }
 
   // Initialize LMIC
@@ -147,22 +185,41 @@ void loop() {
 }
 
 // ============================================================================
-// Read TF-Luna Sensor
+// Read Distance Sensor
 // ============================================================================
 void readSensor() {
-  if (tflI2C.getData(tfDist, tfFlux, tfTemp, tfAddr)) {
-    sensorData.distance_cm = tfDist;
+  // Use the unified sensor interface
+  lastReading = distanceSensor.read();
+  
+  if (lastReading.valid) {
+    sensorData.distance_cm = (uint16_t)lastReading.distance_cm;
     sensorData.timestamp = millis() / 1000;  // Seconds since boot
     
-    Serial.print(F("Distance: "));
-    Serial.print(tfDist);
-    Serial.print(F(" cm, Flux: "));
-    Serial.print(tfFlux);
-    Serial.print(F(", Temp: "));
-    Serial.print(tfTemp);
-    Serial.println(F(" C"));
+    Serial.print(F("Sensor: "));
+    Serial.print(distanceSensor.getName());
+    Serial.print(F(" | Distance: "));
+    Serial.print(lastReading.distance_cm, 1);
+    Serial.print(F(" cm ("));
+    Serial.print(lastReading.distance_m, 3);
+    Serial.print(F(" m)"));
+    
+    // Print signal strength if available (LiDAR sensors)
+    if (lastReading.signal_strength > 0) {
+      Serial.print(F(" | Signal: "));
+      Serial.print(lastReading.signal_strength);
+    }
+    
+    // Print temperature if available
+    if (lastReading.temperature != 0) {
+      Serial.print(F(" | Temp: "));
+      Serial.print(lastReading.temperature);
+      Serial.print(F(" C"));
+    }
+    
+    Serial.println();
   } else {
-    Serial.println(F("ERROR: Failed to read TF-Luna sensor"));
+    Serial.print(F("ERROR: Failed to read "));
+    Serial.println(distanceSensor.getName());
     sensorData.distance_cm = 0;  // Error value
   }
   
@@ -206,9 +263,13 @@ void sendData() {
   // Prepare payload (JSON format)
   String payload = "{";
   payload += "\"node_id\":\"" + String(sensorData.nodeId) + "\",";
+  payload += "\"sensor\":\"" + String(distanceSensor.getName()) + "\",";
   payload += "\"distance_cm\":" + String(sensorData.distance_cm) + ",";
+  payload += "\"distance_m\":" + String(sensorData.distance_cm / 100.0, 3) + ",";
+  payload += "\"signal\":" + String(lastReading.signal_strength) + ",";
   payload += "\"battery_v\":" + String(sensorData.battery_v, 2) + ",";
   payload += "\"rssi\":" + String(sensorData.rssi) + ",";
+  payload += "\"valid\":" + String(lastReading.valid ? "true" : "false") + ",";
   payload += "\"timestamp\":" + String(sensorData.timestamp);
   payload += "}";
   
@@ -322,4 +383,6 @@ void do_send(osjob_t* j) {
     sendData();
   }
 }
+
+
 

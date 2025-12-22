@@ -90,7 +90,8 @@ const lmic_pinmap lmic_pins = {
 void readSensor();
 void prepareDataPacket();
 void sendData();
-void onEvent (ev_t ev);
+void onEvent(ev_t ev);
+void do_send(osjob_t* j);
 
 // ============================================================================
 // Setup

@@ -1,0 +1,22 @@
+{
+    "name": "RiverMonitoringSensors",
+    "version": "1.0.0",
+    "description": "Distance sensor drivers for river level monitoring (LiDAR and ultrasonic)",
+    "keywords": ["sensors", "lidar", "ultrasonic", "tf-luna", "hc-sr04", "distance"],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/klausdieter/river-monitoring"
+    },
+    "authors": [
+        {
+            "name": "Klaus Dieter Kupper",
+            "maintainer": true
+        }
+    ],
+    "license": "MIT",
+    "frameworks": ["arduino"],
+    "platforms": ["espressif32", "espressif8266"],
+    "headers": ["Sensors.h", "SensorBase.h"]
+}
+
+

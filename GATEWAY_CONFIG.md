@@ -184,3 +184,5 @@ This guide explains how to configure the Wisgate Edge Pro gateway to receive dat
 - [ChirpStack Documentation](https://www.chirpstack.io/docs/)
 - [LoRaWAN Regional Parameters](https://lora-alliance.org/lorawan-for-developers/)
 
+
+

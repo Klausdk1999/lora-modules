@@ -57,3 +57,5 @@ Write-Host "3. Look for 'USB-SERIAL CH340' or 'Silicon Labs CP210x' under 'Ports
 Write-Host "4. Note the COM port number (e.g., COM3, COM4)" -ForegroundColor White
 Write-Host ""
 
+
+
