@@ -78,3 +78,6 @@ Write-Host "   - Go to Network → LoRa → Frequency Plan" -ForegroundColor Whi
 Write-Host "   - Select: AS923-1 (Brazil uses this plan)" -ForegroundColor White
 
 
+
+
+

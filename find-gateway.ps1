@@ -37,3 +37,6 @@ foreach ($ip in $gatewayIPs) {
     Write-Host ""
 }
 
+
+
+

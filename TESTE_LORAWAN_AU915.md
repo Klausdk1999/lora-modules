@@ -283,3 +283,6 @@ Após confirmar que a comunicação está funcionando:
 3. Configure integração com banco de dados
 4. Implemente downlink para configuração remota
 
+
+
+

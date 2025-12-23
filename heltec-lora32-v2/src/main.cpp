@@ -1,104 +1,44 @@
 /**
- * Heltec WiFi LoRa 32 V2 - River Level Monitoring Node
+ * Heltec WiFi LoRa 32 V2 - LoRaWAN Communication Test
  * 
- * This node reads distance measurements from a Benewake TF-Luna LiDAR sensor
- * and transmits the data via LoRaWAN to a Wisgate Edge Pro gateway.
+ * Código simplificado para testar comunicação LoRaWAN com gateway
+ * Configurado para AU915 (Australia/Brazil)
  * 
- * Author: Klaus Dieter Kupper
- * Project: Comparative Evaluation of Low-Cost IoT Sensors for River Level Monitoring
+ * INSTRUÇÕES:
+ * 1. Configure o gateway para AU915
+ * 2. Registre este dispositivo no seu servidor LoRaWAN (TTN/ChirpStack)
+ * 3. Substitua APPEUI, DEVEUI e APPKEY abaixo com os valores do servidor
+ * 4. Faça upload e monitore o Serial Monitor
  */
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
-
-// Use the sensor library - change this to use different sensors
-#include "Sensors.h"
+#include <U8g2lib.h>
 
 // ============================================================================
-// LoRaWAN Configuration
+// LoRaWAN Configuration - SUBSTITUA COM SEUS VALORES DO SERVIDOR
 // ============================================================================
-// IMPORTANT: Replace these with your actual values from the gateway/network server
-static const u1_t PROGMEM APPEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+// IMPORTANTE: Use os valores do seu servidor LoRaWAN (TTN ou ChirpStack)
+static const u1_t PROGMEM APPEUI[8] = { 
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // Substitua com AppEUI do servidor
+};
 void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
 
-static const u1_t PROGMEM DEVEUI[8] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77 };
+static const u1_t PROGMEM DEVEUI[8] = { 
+  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77  // Substitua com DevEUI único deste nó
+};
 void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
 
-static const u1_t PROGMEM APPKEY[16] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 
-                                         0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+static const u1_t PROGMEM APPKEY[16] = { 
+  0x75, 0x59, 0x7d, 0x35, 0x13, 0x64, 0x7c, 0x45,  // AppKey: 75597d3513647c454cbc8fea8ea9e55a
+  0x4c, 0xbc, 0x8f, 0xea, 0x8e, 0xa9, 0xe5, 0x5a
+};
 void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
 
 // ============================================================================
 // Pin Definitions (Heltec WiFi LoRa 32 V2)
-// ============================================================================
-// LoRa pins are handled by the board library
-// I2C pins for TF-Luna: SDA=21, SCL=22 (ESP32 default)
-
-// ============================================================================
-// Sensor Configuration
-// ============================================================================
-// Choose your sensor by uncommenting one of the following:
-#define USE_TF_LUNA      // Benewake TF-Luna (I2C)
-// #define USE_TF02_PRO   // Benewake TF02-Pro (UART on Serial2)
-// #define USE_HCSR04     // HC-SR04 ultrasonic (GPIO 4, 5)
-// #define USE_AJSR04M    // AJ-SR04M waterproof ultrasonic (GPIO 4, 5)
-// #define USE_JSNSR04T   // JSN-SR04T waterproof ultrasonic (GPIO 4, 5)
-
-// Ultrasonic sensor pins (if using ultrasonic)
-#define ULTRASONIC_TRIG_PIN   4
-#define ULTRASONIC_ECHO_PIN   5
-
-// TF02-Pro UART pins (if using TF02-Pro)
-#define TF02_RX_PIN   17
-#define TF02_TX_PIN   16
-
-// Create sensor instance based on selection
-#ifdef USE_TF_LUNA
-    TFLuna distanceSensor;
-#elif defined(USE_TF02_PRO)
-    TF02Pro distanceSensor(Serial2, TF02_RX_PIN, TF02_TX_PIN);
-#elif defined(USE_HCSR04)
-    HCSR04 distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
-#elif defined(USE_AJSR04M)
-    AJSR04M distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
-#elif defined(USE_JSNSR04T)
-    JSNSR04T distanceSensor(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
-#else
-    #error "Please define a sensor type (USE_TF_LUNA, USE_TF02_PRO, etc.)"
-#endif
-
-// Store last reading
-SensorReading lastReading;
-
-// ============================================================================
-// Timing Configuration
-// ============================================================================
-const unsigned long SENSOR_READ_INTERVAL = 5000;  // Read sensor every 5 seconds
-const unsigned long LORA_TX_INTERVAL = 30000;     // Transmit every 30 seconds
-unsigned long lastSensorRead = 0;
-unsigned long lastLoraTx = 0;
-
-// ============================================================================
-// Data Structure
-// ============================================================================
-struct SensorData {
-  char nodeId[16] = "heltec_001";
-  uint16_t distance_cm;
-  float battery_v;
-  int16_t rssi;
-  uint32_t timestamp;
-} sensorData;
-
-// ============================================================================
-// LoRaWAN Job Scheduling
-// ============================================================================
-static osjob_t sendjob;
-
-// ============================================================================
-// LMIC Pin Mapping for Heltec WiFi LoRa 32 V2
 // ============================================================================
 const lmic_pinmap lmic_pins = {
     .nss = 18,
@@ -108,13 +48,37 @@ const lmic_pinmap lmic_pins = {
 };
 
 // ============================================================================
+// OLED Display (Heltec WiFi LoRa 32 V2)
+// ============================================================================
+// Heltec V2 uses SSD1306 OLED: SDA=4, SCL=15, RST=16
+// Using U8G2 for better control over display
+#include <U8g2lib.h>
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
+
+// ============================================================================
+// Timing Configuration
+// ============================================================================
+const unsigned long TX_INTERVAL = 30000;  // Transmitir a cada 30 segundos
+static osjob_t sendjob;
+uint8_t packetCounter = 0;
+
+// ============================================================================
+// Display Status Variables
+// ============================================================================
+String statusText = "Initializing...";
+bool isJoined = false;
+int16_t lastRSSI = 0;
+int8_t lastSNR = 0;
+unsigned long lastUpdate = 0;
+
+// ============================================================================
 // Forward Declarations
 // ============================================================================
-void readSensor();
-void prepareDataPacket();
-void sendData();
-void onEvent(ev_t ev);
+void onEvent (ev_t ev);
 void do_send(osjob_t* j);
+void updateDisplay();
+void displayStatus(String line1, String line2 = "", String line3 = "", String line4 = "");
+String truncateString(String str, int maxLen);
 
 // ============================================================================
 // Setup
@@ -122,42 +86,44 @@ void do_send(osjob_t* j);
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println(F("Heltec WiFi LoRa 32 V2 - River Level Monitor"));
-  Serial.println(F("Initializing..."));
-
-  // Initialize I2C (for I2C sensors)
-  Wire.begin();
-  delay(100);
   
-  // Initialize the sensor
-  Serial.print(F("Initializing sensor: "));
-  Serial.println(distanceSensor.getName());
+  Serial.println(F("====================================="));
+  Serial.println(F("Heltec LoRa32 V2 - LoRaWAN Test"));
+  Serial.println(F("Frequency: AU915"));
+  Serial.println(F("====================================="));
   
-  if (distanceSensor.begin()) {
-    Serial.println(F("Sensor detected and initialized!"));
-    Serial.print(F("  Range: "));
-    Serial.print(distanceSensor.getMinDistance());
-    Serial.print(F(" - "));
-    Serial.print(distanceSensor.getMaxDistance());
-    Serial.println(F(" cm"));
-  } else {
-    Serial.println(F("WARNING: Sensor not detected!"));
-  }
-
+  // Initialize OLED Display
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_ncenB08_tr);  // Nice readable font
+  u8g2.clearBuffer();
+  displayStatus("Heltec LoRa32", "LoRaWAN Test", "Init...", "AU915");
+  
   // Initialize LMIC
   os_init();
-  
-  // Reset LMIC
   LMIC_reset();
   
-  // Set data rate and transmit power for EU868
-  // Adjust these based on your region
-  LMIC_setDrTxpow(DR_SF7, 14);  // SF7, 14dBm
+  // Configure for AU915
+  // AU915 uses 8 channels (0-7) by default
+  // You can enable more channels if needed
+  LMIC_selectSubBand(1);  // Use sub-band 1 (channels 8-15) for AU915
   
-  // Start job (sending will start when LMIC is joined)
+  // Set data rate and transmit power
+  // DR_SF7 = Data Rate 0 (SF7, BW125)
+  // 14 = 14 dBm transmit power
+  LMIC_setDrTxpow(DR_SF7, 14);
+  
+  // Disable adaptive data rate
+  LMIC_setAdrMode(0);
+  
+  // Disable link check validation
+  LMIC_setLinkCheckMode(0);
+  
+  // Start job (will trigger join)
   do_send(&sendjob);
   
-  Serial.println(F("Setup complete. Waiting for LoRaWAN join..."));
+  Serial.println(F("Setup complete. Attempting to join LoRaWAN network..."));
+  Serial.println(F("Watch for 'EV_JOINED' message to confirm successful join."));
+  displayStatus("Heltec LoRa32", "Joining...", "AU915", "");
 }
 
 // ============================================================================
@@ -166,125 +132,38 @@ void setup() {
 void loop() {
   os_runloop_once();
   
-  unsigned long currentMillis = millis();
-  
-  // Read sensor periodically
-  if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL) {
-    readSensor();
-    lastSensorRead = currentMillis;
-  }
-  
-  // Send data periodically (only if joined)
-  if (currentMillis - lastLoraTx >= LORA_TX_INTERVAL) {
-    if (LMIC.devaddr != 0) {  // Check if joined
-      prepareDataPacket();
-      sendData();
-      lastLoraTx = currentMillis;
-    }
+  // Update display periodically
+  if (millis() - lastUpdate > 1000) {
+    updateDisplay();
+    lastUpdate = millis();
   }
 }
 
 // ============================================================================
-// Read Distance Sensor
+// Send Data
 // ============================================================================
-void readSensor() {
-  // Use the unified sensor interface
-  lastReading = distanceSensor.read();
-  
-  if (lastReading.valid) {
-    sensorData.distance_cm = (uint16_t)lastReading.distance_cm;
-    sensorData.timestamp = millis() / 1000;  // Seconds since boot
-    
-    Serial.print(F("Sensor: "));
-    Serial.print(distanceSensor.getName());
-    Serial.print(F(" | Distance: "));
-    Serial.print(lastReading.distance_cm, 1);
-    Serial.print(F(" cm ("));
-    Serial.print(lastReading.distance_m, 3);
-    Serial.print(F(" m)"));
-    
-    // Print signal strength if available (LiDAR sensors)
-    if (lastReading.signal_strength > 0) {
-      Serial.print(F(" | Signal: "));
-      Serial.print(lastReading.signal_strength);
-    }
-    
-    // Print temperature if available
-    if (lastReading.temperature != 0) {
-      Serial.print(F(" | Temp: "));
-      Serial.print(lastReading.temperature);
-      Serial.print(F(" C"));
-    }
-    
-    Serial.println();
-  } else {
-    Serial.print(F("ERROR: Failed to read "));
-    Serial.println(distanceSensor.getName());
-    sensorData.distance_cm = 0;  // Error value
-  }
-  
-  // Read battery voltage (approximate, using ADC)
-  // Note: Heltec V2 has battery monitoring circuit
-  uint16_t batteryRaw = analogRead(37);  // Battery voltage pin
-  sensorData.battery_v = (batteryRaw / 4095.0) * 2.0 * 3.3;  // Voltage divider
-  
-  // Get RSSI from last transmission
-  sensorData.rssi = LMIC.rssi;
-}
-
-// ============================================================================
-// Prepare Data Packet
-// ============================================================================
-void prepareDataPacket() {
-  // Update sensor reading before sending
-  readSensor();
-  
-  Serial.println(F("Preparing data packet..."));
-  Serial.print(F("Node ID: "));
-  Serial.println(sensorData.nodeId);
-  Serial.print(F("Distance: "));
-  Serial.print(sensorData.distance_cm);
-  Serial.println(F(" cm"));
-  Serial.print(F("Battery: "));
-  Serial.print(sensorData.battery_v);
-  Serial.println(F(" V"));
-}
-
-// ============================================================================
-// Send Data via LoRaWAN
-// ============================================================================
-void sendData() {
+void do_send(osjob_t* j) {
   // Check if LMIC is ready
   if (LMIC.opmode & OP_TXRXPEND) {
     Serial.println(F("OP_TXRXPEND, not sending"));
-    return;
+  } else {
+    // Prepare test message
+    packetCounter++;
+    char message[50];
+    snprintf(message, sizeof(message), "Heltec_Test_%d", packetCounter);
+    
+    Serial.print(F("Sending: "));
+    Serial.println(message);
+    Serial.print(F("Packet counter: "));
+    Serial.println(packetCounter);
+    
+    // Send packet
+    LMIC_setTxData2(1, (uint8_t*)message, strlen(message), 0);
+    Serial.println(F("Packet queued for transmission"));
   }
   
-  // Prepare payload (JSON format)
-  String payload = "{";
-  payload += "\"node_id\":\"" + String(sensorData.nodeId) + "\",";
-  payload += "\"sensor\":\"" + String(distanceSensor.getName()) + "\",";
-  payload += "\"distance_cm\":" + String(sensorData.distance_cm) + ",";
-  payload += "\"distance_m\":" + String(sensorData.distance_cm / 100.0, 3) + ",";
-  payload += "\"signal\":" + String(lastReading.signal_strength) + ",";
-  payload += "\"battery_v\":" + String(sensorData.battery_v, 2) + ",";
-  payload += "\"rssi\":" + String(sensorData.rssi) + ",";
-  payload += "\"valid\":" + String(lastReading.valid ? "true" : "false") + ",";
-  payload += "\"timestamp\":" + String(sensorData.timestamp);
-  payload += "}";
-  
-  // Convert to byte array
-  uint8_t payloadBytes[payload.length()];
-  payload.getBytes(payloadBytes, payload.length());
-  
-  Serial.print(F("Sending payload: "));
-  Serial.println(payload);
-  Serial.print(F("Payload length: "));
-  Serial.println(payload.length());
-  
-  // Send packet
-  LMIC_setTxData2(1, payloadBytes, payload.length(), 0);
-  Serial.println(F("Packet queued"));
+  // Schedule next transmission
+  os_setTimedCallback(j, os_getTime()+sec2osticks(TX_INTERVAL/1000), do_send);
 }
 
 // ============================================================================
@@ -308,35 +187,59 @@ void onEvent (ev_t ev) {
       Serial.println(F("EV_BEACON_TRACKED"));
       break;
     case EV_JOINING:
-      Serial.println(F("EV_JOINING"));
+      Serial.println(F("EV_JOINING - Attempting to join network..."));
+      statusText = "Joining...";
+      displayStatus("Heltec LoRa32", "Joining...", "AU915", "");
       break;
     case EV_JOINED:
-      Serial.println(F("EV_JOINED"));
+      Serial.println(F("EV_JOINED - Successfully joined network!"));
       Serial.print(F("NetID: "));
       Serial.println(LMIC.netid, DEC);
       Serial.print(F("DevAddr: "));
       Serial.print(LMIC.devaddr, HEX);
       Serial.println();
-      // Disable link check validation (automatically enabled during join)
+      isJoined = true;
+      statusText = "Joined!";
+      displayStatus("Heltec LoRa32", "JOINED!", "AU915", "Ready");
+      // Disable link check validation
       LMIC_setLinkCheckMode(0);
       break;
     case EV_JOIN_FAILED:
-      Serial.println(F("EV_JOIN_FAILED"));
+      Serial.println(F("EV_JOIN_FAILED - Check your credentials!"));
+      Serial.println(F("Verify:"));
+      Serial.println(F("  - DevEUI matches network server"));
+      Serial.println(F("  - AppEUI matches network server"));
+      Serial.println(F("  - AppKey matches network server"));
+      Serial.println(F("  - Frequency plan is AU915"));
+      isJoined = false;
+      statusText = "Join Failed!";
+      displayStatus("Heltec LoRa32", "JOIN FAILED", "Check creds", "AU915");
       break;
     case EV_REJOIN_FAILED:
       Serial.println(F("EV_REJOIN_FAILED"));
       break;
     case EV_TXCOMPLETE:
-      Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
+      Serial.println(F("EV_TXCOMPLETE"));
       if (LMIC.txrxFlags & TXRX_ACK)
-        Serial.println(F("Received ack"));
+        Serial.println(F("Received ACK"));
       if (LMIC.dataLen) {
         Serial.print(F("Received "));
         Serial.print(LMIC.dataLen);
-        Serial.println(F(" bytes of payload"));
+        Serial.println(F(" bytes of downlink data"));
       }
-      // Schedule next transmission
-      os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(LORA_TX_INTERVAL/1000), do_send);
+      lastRSSI = LMIC.rssi;
+      lastSNR = LMIC.snr;
+      Serial.print(F("RSSI: "));
+      Serial.print(LMIC.rssi);
+      Serial.println(F(" dBm"));
+      Serial.print(F("SNR: "));
+      Serial.print(LMIC.snr);
+      Serial.println(F(" dB"));
+      statusText = "TX Complete";
+      break;
+    case EV_TXSTART:
+      Serial.println(F("EV_TXSTART - Transmission started"));
+      statusText = "Transmitting...";
       break;
     case EV_LOST_TSYNC:
       Serial.println(F("EV_LOST_TSYNC"));
@@ -352,9 +255,6 @@ void onEvent (ev_t ev) {
       break;
     case EV_LINK_ALIVE:
       Serial.println(F("EV_LINK_ALIVE"));
-      break;
-    case EV_TXSTART:
-      Serial.println(F("EV_TXSTART"));
       break;
     case EV_TXCANCELED:
       Serial.println(F("EV_TXCANCELED"));
@@ -373,16 +273,72 @@ void onEvent (ev_t ev) {
 }
 
 // ============================================================================
-// Send Job Handler
+// Display Functions
 // ============================================================================
-void do_send(osjob_t* j) {
-  if (LMIC.opmode & OP_TXRXPEND) {
-    Serial.println(F("OP_TXRXPEND, not sending"));
-  } else {
-    prepareDataPacket();
-    sendData();
+
+// Helper function to truncate string to fit OLED
+String truncateString(String str, int maxLen) {
+  if (str.length() <= maxLen) {
+    return str;
   }
+  return str.substring(0, maxLen);
 }
 
+void displayStatus(String line1, String line2, String line3, String line4) {
+  u8g2.clearBuffer();
+  
+  // Line 1 - Y position: 12 (top margin)
+  if (line1.length() > 0) {
+    u8g2.setCursor(0, 12);
+    u8g2.print(truncateString(line1, 20));
+  }
+  
+  // Line 2 - Y position: 26 (12 + 14 spacing)
+  if (line2.length() > 0) {
+    u8g2.setCursor(0, 26);
+    u8g2.print(truncateString(line2, 20));
+  }
+  
+  // Line 3 - Y position: 40 (26 + 14 spacing)
+  if (line3.length() > 0) {
+    u8g2.setCursor(0, 40);
+    u8g2.print(truncateString(line3, 20));
+  }
+  
+  // Line 4 - Y position: 54 (40 + 14 spacing)
+  if (line4.length() > 0) {
+    u8g2.setCursor(0, 54);
+    u8g2.print(truncateString(line4, 20));
+  }
+  
+  u8g2.sendBuffer();
+}
+
+void updateDisplay() {
+  if (isJoined) {
+    char rssiStr[16];
+    char snrStr[16];
+    char pktStr[16];
+    
+    // Format strings to fit OLED (max 16 chars per line)
+    snprintf(rssiStr, sizeof(rssiStr), "RSSI:%d dBm", lastRSSI);
+    snprintf(snrStr, sizeof(snrStr), "SNR:%d dB", lastSNR);
+    snprintf(pktStr, sizeof(pktStr), "Pkts:%d", packetCounter);
+    
+    // Alternate between RSSI and SNR every 2 seconds
+    static unsigned long lastSwitch = 0;
+    bool showRSSI = (millis() - lastSwitch) % 4000 < 2000;
+    
+    if (showRSSI) {
+      displayStatus("Heltec LoRa32", "JOINED", pktStr, rssiStr);
+    } else {
+      displayStatus("Heltec LoRa32", "JOINED", pktStr, snrStr);
+    }
+  } else {
+    // Show join status - keep it simple and readable
+    String shortStatus = truncateString(statusText, 16);
+    displayStatus("Heltec LoRa32", shortStatus, "AU915", "");
+  }
+}
 
 
