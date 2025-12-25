@@ -216,3 +216,4 @@ static const u1_t PROGMEM DEVEUI[8] = {
 5. Faça upload novamente
 6. O dispositivo deve fazer join com sucesso!
 
+

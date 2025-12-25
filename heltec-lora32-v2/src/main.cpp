@@ -18,22 +18,24 @@
 #include <U8g2lib.h>
 
 // ============================================================================
-// LoRaWAN Configuration - SUBSTITUA COM SEUS VALORES DO SERVIDOR
+// LoRaWAN Configuration - Credenciais do TTN
 // ============================================================================
-// IMPORTANTE: Use os valores do seu servidor LoRaWAN (TTN ou ChirpStack)
+// AppEUI (JoinEUI): 0000000000000000 (padrão quando não especificado)
 static const u1_t PROGMEM APPEUI[8] = { 
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // Substitua com AppEUI do servidor
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
 
+// DevEUI: 75597D3513647C45 - LSB first (use um valor único para cada dispositivo)
 static const u1_t PROGMEM DEVEUI[8] = { 
-  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77  // Substitua com DevEUI único deste nó
+  0x45, 0x7C, 0x64, 0x13, 0x35, 0x7D, 0x59, 0x75
 };
 void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
 
+// AppKey: BDFC920F78D3AF2053D1FB85D6A3347B - MSB first
 static const u1_t PROGMEM APPKEY[16] = { 
-  0x75, 0x59, 0x7d, 0x35, 0x13, 0x64, 0x7c, 0x45,  // AppKey: 75597d3513647c454cbc8fea8ea9e55a
-  0x4c, 0xbc, 0x8f, 0xea, 0x8e, 0xa9, 0xe5, 0x5a
+  0xBD, 0xFC, 0x92, 0x0F, 0x78, 0xD3, 0xAF, 0x20,
+  0x53, 0xD1, 0xFB, 0x85, 0xD6, 0xA3, 0x34, 0x7B
 };
 void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
 
@@ -61,6 +63,8 @@ U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, 
 const unsigned long TX_INTERVAL = 30000;  // Transmitir a cada 30 segundos
 static osjob_t sendjob;
 uint8_t packetCounter = 0;
+unsigned long lastTxTime = 0;
+bool txScheduled = false;
 
 // ============================================================================
 // Display Status Variables
@@ -118,8 +122,8 @@ void setup() {
   // Disable link check validation
   LMIC_setLinkCheckMode(0);
   
-  // Start job (will trigger join)
-  do_send(&sendjob);
+  // Trigger join (don't send data yet, wait for join)
+  LMIC_startJoining();
   
   Serial.println(F("Setup complete. Attempting to join LoRaWAN network..."));
   Serial.println(F("Watch for 'EV_JOINED' message to confirm successful join."));
@@ -137,33 +141,77 @@ void loop() {
     updateDisplay();
     lastUpdate = millis();
   }
+  
+  // Force transmission check using millis() as backup
+  if (isJoined && !txScheduled) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastTxTime > 5000) {  // 5 seconds after join or last TX
+      Serial.println(F("=== Loop: Triggering transmission from loop() ==="));
+      do_send(&sendjob);
+      lastTxTime = currentTime;
+      txScheduled = true;
+    }
+  }
 }
 
 // ============================================================================
 // Send Data
 // ============================================================================
 void do_send(osjob_t* j) {
-  // Check if LMIC is ready
-  if (LMIC.opmode & OP_TXRXPEND) {
-    Serial.println(F("OP_TXRXPEND, not sending"));
-  } else {
-    // Prepare test message
-    packetCounter++;
-    char message[50];
-    snprintf(message, sizeof(message), "Heltec_Test_%d", packetCounter);
-    
-    Serial.print(F("Sending: "));
-    Serial.println(message);
-    Serial.print(F("Packet counter: "));
-    Serial.println(packetCounter);
-    
-    // Send packet
-    LMIC_setTxData2(1, (uint8_t*)message, strlen(message), 0);
-    Serial.println(F("Packet queued for transmission"));
+  Serial.print(F("=== do_send called at os_getTime: "));
+  Serial.println(os_getTime());
+  
+  // Check if joined
+  if (!isJoined) {
+    Serial.println(F("ERROR: Not joined yet, skipping transmission"));
+    Serial.println(F("isJoined flag is false!"));
+    Serial.print(F("LMIC.devaddr: "));
+    Serial.println(LMIC.devaddr, HEX);
+    Serial.println(F("Scheduling retry in 5 seconds..."));
+    // Try again in 5 seconds
+    os_setTimedCallback(j, os_getTime()+sec2osticks(5), do_send);
+    return;
   }
   
-  // Schedule next transmission
-  os_setTimedCallback(j, os_getTime()+sec2osticks(TX_INTERVAL/1000), do_send);
+  Serial.println(F("Device is joined, checking LMIC status..."));
+  Serial.print(F("LMIC.opmode: 0x"));
+  Serial.println(LMIC.opmode, HEX);
+  
+  // Check if LMIC is ready
+  if (LMIC.opmode & OP_TXRXPEND) {
+    Serial.println(F("WARNING: OP_TXRXPEND, LMIC busy, retrying in 2 seconds"));
+    // Try again in 2 seconds
+    os_setTimedCallback(j, os_getTime()+sec2osticks(2), do_send);
+    return;
+  }
+  
+  if (LMIC.opmode & OP_SHUTDOWN) {
+    Serial.println(F("ERROR: LMIC is in SHUTDOWN mode!"));
+    return;
+  }
+  
+  // LMIC is ready, prepare and send message
+  packetCounter++;
+  const char* message = "hello world";
+  uint8_t message_len = strlen(message);
+  
+  Serial.println(F("LMIC is ready, preparing packet..."));
+  Serial.print(F("Sending: "));
+  Serial.println(message);
+  Serial.print(F("Packet counter: "));
+  Serial.println(packetCounter);
+  Serial.print(F("Message length: "));
+  Serial.println(message_len);
+  Serial.print(F("fPort: 1, confirmed: 0 (unconfirmed)"));
+  Serial.println();
+  
+  // Send packet (unconfirmed, port 1)
+  LMIC_setTxData2(1, (uint8_t*)message, message_len, 0);
+  Serial.println(F("LMIC_setTxData2 called - Packet queued for transmission"));
+  txScheduled = true;  // Mark as scheduled
+  lastTxTime = millis();
+  Serial.println(F("Waiting for EV_TXSTART and EV_TXCOMPLETE..."));
+  // Note: Next transmission will be scheduled in EV_TXCOMPLETE
 }
 
 // ============================================================================
@@ -203,6 +251,12 @@ void onEvent (ev_t ev) {
       displayStatus("Heltec LoRa32", "JOINED!", "AU915", "Ready");
       // Disable link check validation
       LMIC_setLinkCheckMode(0);
+      // Reset TX timing
+      lastTxTime = millis();
+      txScheduled = false;
+      Serial.println(F("Join complete - First transmission will trigger in 5 seconds from loop()"));
+      // Also try callback approach
+      os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(5), do_send);
       break;
     case EV_JOIN_FAILED:
       Serial.println(F("EV_JOIN_FAILED - Check your credentials!"));
@@ -219,9 +273,9 @@ void onEvent (ev_t ev) {
       Serial.println(F("EV_REJOIN_FAILED"));
       break;
     case EV_TXCOMPLETE:
-      Serial.println(F("EV_TXCOMPLETE"));
+      Serial.println(F("EV_TXCOMPLETE - Transmission completed!"));
       if (LMIC.txrxFlags & TXRX_ACK)
-        Serial.println(F("Received ACK"));
+        Serial.println(F("Received ACK from gateway"));
       if (LMIC.dataLen) {
         Serial.print(F("Received "));
         Serial.print(LMIC.dataLen);
@@ -236,6 +290,15 @@ void onEvent (ev_t ev) {
       Serial.print(LMIC.snr);
       Serial.println(F(" dB"));
       statusText = "TX Complete";
+      // Reset flags for next transmission
+      lastTxTime = millis();
+      txScheduled = false;
+      // Schedule next transmission after TX_INTERVAL
+      Serial.print(F("Scheduling next transmission in "));
+      Serial.print(TX_INTERVAL/1000);
+      Serial.println(F(" seconds..."));
+      os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL/1000), do_send);
+      Serial.println(F("Next transmission scheduled successfully"));
       break;
     case EV_TXSTART:
       Serial.println(F("EV_TXSTART - Transmission started"));

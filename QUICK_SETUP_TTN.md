@@ -82,3 +82,4 @@ Depois de atualizar o AppEUI, faça upload novamente.
 
 **Me envie o Application EUI do TTN** e eu atualizo o código para você!
 
+
