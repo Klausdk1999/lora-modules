@@ -123,3 +123,5 @@ TTN MQTT messages are JSON. Example:
 3. Run subscription command (see Option 1)
 4. Watch data arrive in real-time!
 
+
+
