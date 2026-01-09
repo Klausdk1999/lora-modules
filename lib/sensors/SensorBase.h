@@ -140,3 +140,7 @@ inline const char* getSensorTypeName(SensorType type) {
 #endif // SENSOR_BASE_H
 
 
+
+
+
+

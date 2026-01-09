@@ -1,0 +1,76 @@
+# New Papers BibTeX Entries for Bibliography
+
+## Add these entries to: Sensores-para-Monitoramento-do-Nivel-de-Rios/template_eca_ufsc_abnt/pos_textual/referencias.bib
+
+# 1. Kabi et al. (2023) - Field Deployment Study (PRIORITY: HIGH)
+@article{kabi_2023_river,
+  author = {Kabi, Jason N. and Kamucha, George and Maina, Ciira},
+  title = {Open-source River Level Monitoring System with LoRaWAN},
+  journal = {HardwareX},
+  year = {2023},
+  volume = {},
+  pages = {},
+  doi = {10.1016/j.ohx.2023.e00414},
+  url = {https://doi.org/10.1016/j.ohx.2023.e00414},
+  note = {18-month field deployment study on Muringato River, Kenya}
+}
+
+# 2. Rahman and Ahmed (2020) - Foundational Architecture (PRIORITY: HIGH)
+@inproceedings{rahman_2020_flood,
+  author = {Rahman, M. A. and Ahmed, K.},
+  title = {IoT-based Flood Monitoring System Using Ultrasonic Sensors},
+  booktitle = {Proceedings of 2020 International Conference on Robotics, Electrical and Signal Processing Techniques (ICREST)},
+  year = {2020},
+  pages = {},
+  doi = {10.1145/3441657.3441668},
+  url = {https://doi.org/10.1145/3441657.3441668},
+  publisher = {IEEE/ACM},
+  note = {Dual-alerting mechanism: local buzzers and cloud SMS}
+}
+
+# 3. Orlovs et al. (2025) - Network Performance Study (PRIORITY: HIGH)
+@article{orlovs_2025_lpwan,
+  author = {Orlovs, Dmitrijs and Rusins, Artis and Skrastins, Valters and Judvaitis, Janis},
+  title = {Comparative Analysis of LPWAN Technologies for Environmental Monitoring},
+  journal = {IoT},
+  year = {2025},
+  volume = {6},
+  number = {4},
+  pages = {},
+  doi = {10.3390/iot6040077},
+  url = {https://doi.org/10.3390/iot6040077},
+  publisher = {MDPI},
+  note = {LoRaWAN: 11km rural, 3km urban; Energy: 82.2 µWh/message}
+}
+
+# 4. Panagopoulos et al. (2021) - Sensor Validation (PRIORITY: HIGH)
+@article{panagopoulos_2021_ultrasonic,
+  author = {Panagopoulos, Yiannis and others},
+  title = {Evaluation of Ultrasonic Sensors for Water Level Monitoring in Urban Streams},
+  journal = {Sensors},
+  year = {2021},
+  volume = {21},
+  number = {14},
+  pages = {},
+  doi = {10.3390/s21144689},
+  url = {https://doi.org/10.3390/s21144689},
+  publisher = {MDPI},
+  note = {7% variance vs pressure transducers; Temperature drift: 1-2cm per 10°C}
+}
+
+# 5. Pires and Veiga (2025) - ESP32 Implementation (PRIORITY: HIGH)
+@article{pires_2025_esp32,
+  author = {Pires, Luis Miguel and Veiga, Ileida},
+  title = {ESP32-based Monitoring System with Structural Health Monitoring},
+  journal = {Designs},
+  year = {2025},
+  volume = {9},
+  number = {6},
+  pages = {},
+  doi = {10.3390/designs9060144},
+  url = {https://doi.org/10.3390/designs9060144},
+  publisher = {MDPI},
+  note = {Multi-month battery life with deep sleep; MEMS accelerometer integration}
+}
+
+# NOTE: Verify DOIs and complete volume/pages before finalizing bibliography entry!

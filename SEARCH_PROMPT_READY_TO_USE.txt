@@ -1,0 +1,98 @@
+ACADEMIC PUBLICATION SEARCH PROMPT
+=====================================
+
+You are searching for academic publications for a Master's thesis on "LoRaWAN-based wireless sensor networks for river level monitoring" using ESP32 microcontrollers with LoRa modules, distance sensors (LiDAR/ultrasonic), and deep sleep power management.
+
+MINIMUM REQUIREMENTS:
+- Peer-reviewed journals/conferences (IEEE, ACM, Springer, Elsevier, MDPI)
+- Publication date: 2015-2025 (prefer 2018+)
+- Citation count: 5+ citations (or very recent 2024-2025)
+- English language (Portuguese acceptable if highly relevant)
+- Full citation info and DOI available
+
+PRIORITY 1 - CRITICAL GAPS (Search These First):
+
+1. LoRaWAN River/Water Level Monitoring Systems
+   Search: "LoRaWAN" AND "river level monitoring" OR "water level" AND "sensor" AND ("field" OR "deployment")
+   Need: Complete system implementations, field deployments, network performance, real-world validation
+
+2. ESP32 + LoRa Deep Sleep Power Management
+   Search: "ESP32" AND "LoRa" AND ("deep sleep" OR "power consumption" OR "battery life")
+   Need: Measured power consumption, battery life validation, wake-up time, power optimization
+
+3. LoRaWAN Power Consumption Studies
+   Search: "LoRaWAN" AND "power consumption" AND ("measurement" OR "empirical" OR "validation")
+   Need: Empirical measurements, battery life studies, power models, field test data
+
+PRIORITY 2 - IMPORTANT GAPS:
+
+4. LoRaWAN Network Performance (Environmental Monitoring)
+   Search: "LoRaWAN" AND "environmental monitoring" AND ("performance" OR "range" OR "coverage")
+   Need: Outdoor performance, range analysis, link quality, gateway placement
+
+5. WSN for Water Monitoring
+   Search: "wireless sensor network" AND "water monitoring" AND ("river" OR "hydrological")
+   Need: System architectures, multi-sensor integration, data aggregation
+
+6. LoRaWAN vs Other LPWAN
+   Search: "LoRaWAN" AND ("NB-IoT" OR "Sigfox") AND "comparison"
+   Need: Comparative studies, trade-offs, cost-benefit analysis
+
+PRIORITY 3 - SUPPORTING:
+
+7. ESP32 Low-Power Validation
+   Search: "ESP32" AND "low power" AND ("validation" OR "measurement" OR "empirical")
+
+8. Sensor Integration with LoRaWAN
+   Search: ("ultrasonic sensor" OR "LiDAR sensor") AND "LoRaWAN" AND "integration"
+
+WHAT WE ALREADY HAVE (DO NOT DUPLICATE):
+- Sun et al. (2022) - LoRa survey
+- Dao et al. (2025) - LoRa water level (energy-harvesting)
+- Ishibashi et al. (2017, 2019) - Beat sensors with LoRa
+- ESP32 Datasheet - Power specs
+- Ferreira et al. (2023) - WSN power management
+- Pereira et al. (2022) - Ultrasonic evaluation
+- Mohammadreza MasoudiMoghaddam et al. (2024) - Ultrasonic validation
+- Paul et al. (2020) - LiDAR temperature compensation
+- Santana et al. (2024) - LiDAR calibration
+
+OUTPUT FORMAT FOR EACH PAPER:
+
+### [Title]
+**Authors:** [Names]
+**Year:** [Year]
+**Journal/Conference:** [Name]
+**DOI:** [DOI]
+**Citations:** [Number]
+
+**Relevance:** [1-2 sentences why relevant]
+
+**Key Findings:**
+- [Finding 1]
+- [Finding 2]
+
+**BibTeX:**
+@article{key,
+  author = {},
+  title = {},
+  journal = {},
+  year = {},
+  doi = {}
+}
+
+SEARCH DATABASES:
+1. IEEE Xplore
+2. ACM Digital Library
+3. Google Scholar
+4. ScienceDirect
+5. SpringerLink
+6. MDPI
+
+FOCUS ON:
+- Field deployments (not just simulations)
+- Empirical measurements (not just theory)
+- Complete systems (not just components)
+- Recent papers (2020-2025 preferred)
+
+START SEARCHING AND PROVIDE RESULTS ORGANIZED BY PRIORITY LEVEL!
