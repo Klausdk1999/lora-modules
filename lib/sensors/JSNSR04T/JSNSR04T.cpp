@@ -99,8 +99,10 @@ float JSNSR04T::readDistanceAvg(uint8_t samples, uint8_t delayMs) {
 }
 
 float JSNSR04T::getSpeedOfSound() {
-    // Speed of sound varies with temperature
-    // Formula: c = 331.3 + 0.606 * T (where T is in Celsius)
+    // Speed of sound varies with temperature (Mohammed et al. 2019, Tawalbeh et al. 2023)
+    // Formula: v(T) = 331.3 + 0.606 * θ (where θ is temperature in Celsius)
+    // Mohammed et al. (2019) and Tawalbeh et al. (2023) demonstrated that temperature compensation
+    // is critical: diurnal temperature swings of 20°C can introduce measurement errors of several centimeters
     // Returns speed in m/s, convert to cm/us
     float speedMs = 331.3f + (0.606f * _temperature);
     return speedMs / 10000.0f;  // Convert m/s to cm/us
