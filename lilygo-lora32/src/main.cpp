@@ -10,11 +10,11 @@
  * - Power: Battery powered from board's LiPo connector with deep sleep
  * - Transmission interval: 15 minutes (as per thesis)
  * 
- * Wiring (TF02-Pro to LilyGo LoRa32):
+ * Wiring (TF02-Pro to T-Beam V1.2):
  *   VCC -> 5V (or 3.3V if sensor supports it)
  *   GND -> GND
- *   TX  -> GPIO 16 (RX pin for Serial2)
- *   RX  -> GPIO 17 (TX pin for Serial2)
+ *   TX  -> GPIO 3 (RX pin for Serial2)
+ *   RX  -> GPIO 1 (TX pin for Serial2)
  * 
  * Academic Findings Applied:
  * - Temperature compensation based on Mohammed et al. (2019) and Tawalbeh et al. (2023): critical for sub-centimeter accuracy (0.1% per °C deviation)
@@ -34,8 +34,8 @@
 #include <SPI.h>
 #include <HardwareSerial.h>
 
-// Include the TF02-Pro sensor library
-#include "sensors/TF02Pro/TF02Pro.h"
+// Include the TF02-Pro sensor library (from ../lib/sensors via -I../lib/sensors in platformio.ini)
+#include "TF02Pro/TF02Pro.h"
 
 // ============================================================================
 // Configuration Options
@@ -46,6 +46,14 @@
 #define NUM_READINGS_AVG        7       // Number of readings for median filtering (odd recommended)
 #define DEEP_SLEEP_ENABLED      true    // Enable deep sleep between transmissions
 #define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% deviation from median
+
+// ============================================================================
+// Sensor Test Mode (Optional - for testing without LoRaWAN gateway)
+// ============================================================================
+// Set to true to disable LoRaWAN and run continuous sensor readings via Serial
+// Set to false (default) to use normal LoRaWAN operation
+// When enabled, all LoRaWAN code is bypassed using conditional compilation
+#define SENSOR_TEST_MODE        true    // Set to true to enable sensor-only test mode (LoRaWAN disabled but code preserved)
 
 // ============================================================================
 // LoRaWAN Configuration - TTN Device: lilygo-river-lora
@@ -71,19 +79,34 @@ static const u1_t PROGMEM APPKEY[16] = {
 void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
 
 // ============================================================================
-// Pin Definitions (LilyGo LoRa32)
+// Pin Definitions (LilyGo T-Beam AXP2101 v1.2 / LoRa32)
 // ============================================================================
-// LoRa pins
+// LoRa Module Pin Configuration (SX1276/8)
+// These pins are specific to the T-Beam AXP2101 v1.2 board and were carefully
+// configured to work with the LMIC library. DO NOT change these without verifying
+// the board's schematic and pinout documentation.
 const lmic_pinmap lmic_pins = {
-    .nss = 18,
-    .rxtx = LMIC_UNUSED_PIN,
-    .rst = 23,
-    .dio = {26, 33, 32},
+    .nss = 18,              // Chip Select (CS) - SPI slave select for LoRa module
+    .rxtx = LMIC_UNUSED_PIN, // Not used in this configuration
+    .rst = 23,              // Reset pin - hardware reset for LoRa module
+    .dio = {26, 33, 32},    // Digital I/O pins for LoRa interrupt handling:
+                            //   DIO0 (GPIO 26): Used for TX/RX complete interrupts
+                            //   DIO1 (GPIO 33): Used for RX timeout interrupts
+                            //   DIO2 (GPIO 32): Used for FSK mode (not used in LoRa)
 };
 
 // UART pins for TF02-Pro (Serial2 on ESP32)
-#define TF02_RX_PIN     16  // GPIO 16 for Serial2 RX
-#define TF02_TX_PIN     17  // GPIO 17 for Serial2 TX
+// T-Beam V1.2 pinout - WORKING CONFIGURATION:
+// GPIO 14 (TX) and GPIO 13 (RX) - TESTED AND WORKING
+// These pins avoid conflict with USB Serial (GPIO 1/3) and GPS (GPIO 12/34)
+// 
+// Wiring:
+//   TF02-Pro TX -> GPIO 13 (Serial2 RX)
+//   TF02-Pro RX -> GPIO 14 (Serial2 TX)
+//   TF02-Pro VCC -> 5V
+//   TF02-Pro GND -> GND
+#define TF02_RX_PIN     13  // GPIO 13 for Serial2 RX (receives from TF02-Pro TX) - WORKING
+#define TF02_TX_PIN     14  // GPIO 14 for Serial2 TX (sends to TF02-Pro RX) - WORKING
 
 // Battery monitoring (if available on LilyGo board)
 #define BATTERY_ADC_PIN 35  // Common ADC pin for battery voltage (adjust if needed)
@@ -91,7 +114,8 @@ const lmic_pinmap lmic_pins = {
 // ============================================================================
 // Sensor Instance (TF02-Pro via UART)
 // ============================================================================
-HardwareSerial Serial2(2);  // Use Serial2 for TF02-Pro
+// Note: ESP32 already has Serial2 defined, so we use it directly
+// Serial2 is configured in setup() with begin() call
 TF02Pro lidarSensor(Serial2, TF02_RX_PIN, TF02_TX_PIN);
 
 // ============================================================================
@@ -134,31 +158,78 @@ float filterOutliers(float readings[], uint8_t& validCount, float median, float 
 // Setup
 // ============================================================================
 void setup() {
+    // ========================================================================
+    // CRITICAL DEBUG: Initialize Serial IMMEDIATELY
+    // ========================================================================
+    Serial.begin(115200);
+    delay(500);  // Give serial time to initialize
+    
+    // Force flush to ensure data is sent
+    Serial.flush();
+    delay(100);
+    
+    // Print debug messages immediately
+    Serial.println(F("\n\n\n"));
+    Serial.println(F("============================================="));
+    Serial.println(F("*** DEBUG: SETUP STARTED ***"));
+    Serial.println(F("============================================="));
+    Serial.flush();
+    delay(100);
+    
     // Check if we're waking from deep sleep
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     
-    if (ENABLE_SERIAL_DEBUG) {
-        Serial.begin(115200);
-        delay(1000);
-        Serial.println(F("\n============================================="));
-        Serial.println(F("LilyGo LoRa32 - TF02-Pro LiDAR Sensor Node"));
-        Serial.println(F("=============================================\n"));
-        
-        if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-            Serial.println(F("Woke up from deep sleep"));
-        } else {
-            Serial.println(F("Cold boot"));
-        }
+    Serial.print(F("Wakeup reason: "));
+    if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
+        Serial.println(F("DEEP SLEEP TIMER"));
+    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+        Serial.println(F("EXT0"));
+    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) {
+        Serial.println(F("EXT1"));
+    } else {
+        Serial.println(F("COLD BOOT / POWER ON"));
     }
+    Serial.flush();
+    delay(100);
     
-    // Initialize Serial2 for TF02-Pro (115200 baud)
-    Serial2.begin(115200, SERIAL_8N1, TF02_RX_PIN, TF02_TX_PIN);
-    delay(SENSOR_WARMUP_MS);
+    Serial.println(F("\n============================================="));
+    Serial.println(F("LilyGo LoRa32 - TF02-Pro LiDAR Sensor Node"));
+    Serial.println(F("=============================================\n"));
+    Serial.flush();
+    delay(100);
     
     // Initialize TF02-Pro sensor
+    // Note: begin() will initialize Serial2 internally, so we don't initialize it here
+    Serial.println(F("*** DEBUG: Starting TF02-Pro initialization ***"));
+    Serial.flush();
+    delay(100);
+    
     Serial.println(F("Initializing TF02-Pro LiDAR sensor..."));
-    if (lidarSensor.begin()) {
+    Serial.print(F("  UART pins: RX=GPIO "));
+    Serial.print(TF02_RX_PIN);
+    Serial.print(F(" (TF02-Pro TX), TX=GPIO "));
+    Serial.print(TF02_TX_PIN);
+    Serial.println(F(" (TF02-Pro RX)"));
+    Serial.println(F("  Baud rate: 115200"));
+    Serial.println(F("  Waiting for sensor data (up to 2 seconds)..."));
+    Serial.flush();
+    delay(100);
+    
+    // Try initialization with longer timeout
+    Serial.println(F("*** DEBUG: Calling lidarSensor.begin() ***"));
+    Serial.flush();
+    delay(100);
+    
+    bool beginResult = lidarSensor.begin();
+    
+    Serial.print(F("*** DEBUG: lidarSensor.begin() returned: "));
+    Serial.println(beginResult ? F("TRUE") : F("FALSE"));
+    Serial.flush();
+    delay(100);
+    
+    if (beginResult) {
         sensorInitialized = true;
+        Serial.println(F("*** DEBUG: Sensor initialized successfully ***"));
         Serial.println(F("✓ TF02-Pro sensor initialized successfully"));
         
         // Set lower frame rate for power saving (10Hz instead of default 100Hz)
@@ -169,39 +240,148 @@ void setup() {
         if (testReading.valid) {
             Serial.print(F("  Test reading: "));
             Serial.print(testReading.distance_cm);
-            Serial.println(F(" cm"));
+            Serial.print(F(" cm, Temp: "));
+            Serial.print(testReading.temperature);
+            Serial.println(F(" °C"));
+        } else {
+            Serial.println(F("  Warning: Test reading failed, but sensor detected"));
         }
     } else {
+        Serial.println(F("*** DEBUG: Sensor initialization FAILED ***"));
         Serial.println(F("✗ TF02-Pro sensor NOT detected!"));
-        Serial.println(F("  Check wiring: VCC->5V, GND->GND, TX->GPIO16, RX->GPIO17"));
+        Serial.println(F("  Troubleshooting:"));
+        Serial.println(F("    1. Check power: VCC->5V, GND->GND"));
+        Serial.print(F("    2. Check TX wire: TF02-Pro TX -> GPIO "));
+        Serial.println(TF02_RX_PIN);
+        Serial.print(F("    3. Check RX wire: TF02-Pro RX -> GPIO "));
+        Serial.println(TF02_TX_PIN);
+        Serial.println(F("    4. Verify sensor is powered (LED should be on)"));
+        Serial.println(F("    5. Try swapping TX/RX wires (might be inverted)"));
+        Serial.flush();
+        delay(100);
     }
     
-    // Initialize LMIC
+#if !SENSOR_TEST_MODE
+    // ========================================================================
+    // LoRaWAN LMIC Initialization (WORKING CONFIGURATION - DO NOT MODIFY)
+    // ========================================================================
+    // This configuration was carefully tuned and tested. All settings below
+    // are critical for proper LoRaWAN operation on the T-Beam AXP2101 v1.2.
+    
+    // Initialize the LMIC (LoRaWAN MAC In C) library
+    // This sets up the OS scheduler and initializes the radio module
     os_init();
+    
+    // Reset LMIC state machine to ensure clean startup
+    // This clears any previous state and prepares for network join
     LMIC_reset();
     
-    // Set frequency plan to AU915
+    // ========================================================================
+    // Frequency Plan Configuration (AU915 - Australia/Brazil)
+    // ========================================================================
+    // The AU915 band uses 8 sub-bands (channels 0-7, 8-15, etc.)
+    // Sub-band 1 (channels 8-15) is selected to avoid interference with
+    // other LoRaWAN devices and comply with regional regulations.
+    LMIC_selectSubBand(1);
+    
+    // ========================================================================
+    // Data Rate and Power Configuration
+    // ========================================================================
     // Network configuration: LoRaWAN Class A for minimal power consumption (Ballerini et al. 2020)
     // Ballerini et al. (2020) demonstrated that LoRaWAN consumes order of magnitude less energy
     // than NB-IoT for small, sporadic payloads typical of flood monitoring
-    LMIC_selectSubBand(1);
-    // Using SF7 for optimal balance: lower Time on Air (ToA) = lower energy consumption (Casals et al. 2017)
-    // Casals et al. (2017) showed that increasing SF from 7 to 12 increases energy by ~40x
-    // More gateways allow nodes to use lower SFs, directly extending battery life (Casals et al. 2017)
+    
+    // Using SF7 (Spreading Factor 7) for optimal balance:
+    // - Lower Time on Air (ToA) = lower energy consumption (Casals et al. 2017)
+    // - Casals et al. (2017) showed that increasing SF from 7 to 12 increases energy by ~40x
+    // - More gateways allow nodes to use lower SFs, directly extending battery life (Casals et al. 2017)
+    // Power level 14 (14 dBm) provides good range while maintaining reasonable power consumption
     LMIC_setDrTxpow(DR_SF7, 14);
+    
+    // ========================================================================
+    // Adaptive Data Rate (ADR) and Link Check Configuration
+    // ========================================================================
+    // ADR disabled (0): Node maintains fixed data rate (SF7)
+    // This is important for predictable power consumption and transmission timing
+    // Enabling ADR would allow the network to adjust data rate, but we want
+    // consistent behavior for battery life estimation
     LMIC_setAdrMode(0);
+    
+    // Link check mode disabled (0): Node does not request link quality reports
+    // This reduces overhead and power consumption. RSSI/SNR are still reported
+    // in transmission acknowledgments when available.
     LMIC_setLinkCheckMode(0);
     
-    // Start join process
+    // ========================================================================
+    // Start Network Join Process
+    // ========================================================================
+    // Schedule the initial send job, which will trigger the join process
+    // if the device is not yet joined, or send data if already joined
     do_send(&sendjob);
     
     Serial.println(F("\nSetup complete. Joining LoRaWAN network..."));
+#else
+    // ========================================================================
+    // Sensor Test Mode: Skip LoRaWAN initialization
+    // ========================================================================
+    Serial.println(F("\n============================================="));
+    Serial.println(F("SENSOR TEST MODE - LoRaWAN DISABLED"));
+    Serial.println(F("============================================="));
+    Serial.println(F("Running continuous sensor readings..."));
+    Serial.println(F("Set SENSOR_TEST_MODE to false to enable LoRaWAN"));
+    Serial.println(F("=============================================\n"));
+    Serial.println(F("*** DEBUG: Setup complete, entering loop() ***"));
+    Serial.flush();
+    delay(100);
+#endif
 }
 
 // ============================================================================
 // Main Loop
 // ============================================================================
 void loop() {
+    // ========================================================================
+    // DEBUG: Loop heartbeat
+    // ========================================================================
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat > 5000) {  // Every 5 seconds
+        Serial.println(F("*** DEBUG: Loop running (heartbeat) ***"));
+        Serial.flush();
+        lastHeartbeat = millis();
+    }
+    
+#if SENSOR_TEST_MODE
+    // ========================================================================
+    // Sensor Test Mode: Continuous sensor reading loop
+    // ========================================================================
+    if (sensorInitialized) {
+        // Read sensor data and print to Serial
+        if (readSensorData()) {
+            Serial.print(F("\n>>> Test Reading Summary: "));
+            Serial.print(sensorData.distanceMm / 10.0f);
+            Serial.print(F(" cm, Temp: "));
+            Serial.print(sensorData.temperature);
+            Serial.print(F(" °C, Signal: "));
+            Serial.print(sensorData.signalStrength);
+            Serial.print(F(", Battery: "));
+            Serial.print(sensorData.batteryPercent);
+            Serial.println(F("%"));
+        } else {
+            Serial.println(F("Sensor read failed!"));
+        }
+        
+        // Wait before next reading (5 seconds for test mode)
+        Serial.println(F("\n--- Next reading in 5 seconds ---\n"));
+        delay(5000);
+    } else {
+        Serial.println(F("Sensor not initialized! Waiting 5 seconds..."));
+        delay(5000);
+    }
+#else
+    // ========================================================================
+    // Normal LoRaWAN Operation Mode
+    // ========================================================================
+    // Run LMIC OS scheduler (handles LoRaWAN state machine, events, timers)
     os_runloop_once();
     
     // If we've joined and transmitted, enter deep sleep
@@ -213,6 +393,7 @@ void loop() {
         Serial.flush();
         enterDeepSleep(TX_INTERVAL_SECONDS);
     }
+#endif
 }
 
 // ============================================================================
@@ -460,8 +641,14 @@ float filterOutliers(float readings[], uint8_t& validCount, float median, float 
 }
 
 // ============================================================================
-// LMIC Send Job
+// LMIC Send Job (Transmission Handler)
 // ============================================================================
+// This function is called by the LMIC OS scheduler to handle data transmission.
+// It manages the complete transmission cycle: checking join status, reading
+// sensor data, formatting payload, and queuing the packet for transmission.
+// 
+// The function is designed to be called repeatedly by the scheduler until
+// transmission is successful or the device joins the network.
 void do_send(osjob_t* j) {
     // Check if LMIC is busy
     if (LMIC.opmode & OP_TXRXPEND) {
@@ -511,8 +698,22 @@ void do_send(osjob_t* j) {
 }
 
 // ============================================================================
-// LMIC Event Handler
+// LMIC Event Handler (LoRaWAN State Machine)
 // ============================================================================
+// This function handles all LoRaWAN events from the LMIC library.
+// It is called automatically by the LMIC OS scheduler when events occur
+// (join complete, transmission complete, join failed, etc.).
+//
+// Key events handled:
+// - EV_JOINING: Device is attempting to join the network
+// - EV_JOINED: Device successfully joined (receives DevAddr)
+// - EV_JOIN_FAILED: Join attempt failed (will retry)
+// - EV_TXCOMPLETE: Transmission finished (may include ACK or downlink data)
+// - EV_TXSTART: Transmission started
+// - EV_LINK_DEAD: Connection to gateway lost
+//
+// This event handler is critical for proper LoRaWAN operation and should
+// not be modified without understanding the LMIC state machine.
 void onEvent(ev_t ev) {
     Serial.print(os_getTime());
     Serial.print(F(": "));

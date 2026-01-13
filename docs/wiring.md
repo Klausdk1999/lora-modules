@@ -74,7 +74,7 @@ TF02-Pro Sensor            LilyGo LoRa32
 **Note:** TF02-Pro uses UART interface (Serial2) instead of I2C. This provides:
 - Longer range (22m vs 8m for TF-Luna)
 - Better for larger rivers (as per thesis requirements)
-- Temperature compensation needed (based on paul_2020_a findings)
+- Temperature compensation needed (Mohammed et al. 2019, Tawalbeh et al. 2023)
 
 ---
 

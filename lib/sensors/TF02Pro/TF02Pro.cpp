@@ -8,26 +8,54 @@
 #include "TF02Pro.h"
 
 bool TF02Pro::begin() {
+    // Use Serial.print with explicit flush to avoid interference
+    Serial.print(F("[TF02Pro] begin() - RX:"));
+    Serial.print(_rxPin);
+    Serial.print(F(" TX:"));
+    Serial.println(_txPin);
+    delay(50);  // Small delay to ensure Serial output is sent
+    
     // Initialize serial with custom pins if specified
     #if defined(ESP32)
         if (_rxPin >= 0 && _txPin >= 0) {
+            Serial.println(F("[TF02Pro] Init Serial2..."));
+            delay(50);
             _serial->begin(_baud, SERIAL_8N1, _rxPin, _txPin);
+            Serial.println(F("[TF02Pro] Serial2 OK"));
+            delay(50);
         } else {
+            Serial.println(F("[TF02Pro] Init Serial2 default..."));
+            delay(50);
             _serial->begin(_baud);
+            Serial.println(F("[TF02Pro] Serial2 OK"));
+            delay(50);
         }
     #else
         _serial->begin(_baud);
     #endif
     
-    delay(100);
+    // TF02-Pro needs time to start sending data after power-on
+    Serial.println(F("[TF02Pro] Wait 500ms..."));
+    delay(500);
+    
+    Serial.println(F("[TF02Pro] Clear buffer..."));
     clearBuffer();
+    delay(50);
     
     // Try to read a frame to verify connection
+    // TF02-Pro sends data continuously, so we should receive a frame if connected
+    Serial.println(F("[TF02Pro] Check connection..."));
+    delay(50);
+    
     if (isConnected()) {
+        Serial.println(F("[TF02Pro] CONNECTED!"));
+        delay(50);
         _initialized = true;
         return true;
     }
     
+    Serial.println(F("[TF02Pro] NOT CONNECTED!"));
+    delay(50);
     _initialized = false;
     return false;
 }
@@ -35,13 +63,76 @@ bool TF02Pro::begin() {
 bool TF02Pro::isConnected() {
     uint8_t buffer[TF02_FRAME_SIZE];
     uint32_t startTime = millis();
+    uint32_t bytesReceived = 0;
+    uint32_t lastBytesCount = 0;
+    uint32_t lastDebugTime = 0;
     
-    // Wait up to 200ms for a valid frame
-    while (millis() - startTime < 200) {
-        if (readFrame(buffer)) {
-            return true;
+    Serial.println(F("[isConnected] Wait 2000ms..."));
+    delay(50);
+    
+    // Wait up to 2000ms for a valid frame (TF02-Pro needs time to start sending data)
+    while (millis() - startTime < 2000) {
+        // Check if we're receiving any data at all
+        uint32_t available = _serial->available();
+        if (available > 0) {
+            bytesReceived += available;
+            
+            // Print debug every 300ms or when bytes count changes significantly
+            if ((millis() - lastDebugTime > 300) || (bytesReceived - lastBytesCount > 10)) {
+                Serial.print(F("[isConnected] RX:"));
+                Serial.print(bytesReceived);
+                Serial.print(F(" avail:"));
+                Serial.println(available);
+                delay(50);
+                lastDebugTime = millis();
+                lastBytesCount = bytesReceived;
+            }
+            
+            if (readFrame(buffer)) {
+                uint16_t dist = buffer[2] | (buffer[3] << 8);
+                Serial.print(F("[isConnected] FRAME OK! Dist:"));
+                Serial.println(dist);
+                delay(50);
+                return true;
+            }
+        } else {
+            // Print debug every 500ms if no data
+            if (millis() - lastDebugTime > 500) {
+                Serial.print(F("[isConnected] No data ("));
+                Serial.print(millis() - startTime);
+                Serial.println(F("ms)"));
+                delay(50);
+                lastDebugTime = millis();
+            }
         }
-        delay(10);
+        delay(50);  // Longer delay between attempts
+    }
+    
+    // If we received bytes but no valid frame, might be baud rate or wiring issue
+    Serial.print(F("[isConnected] TIMEOUT! Bytes:"));
+    Serial.println(bytesReceived);
+    delay(50);
+    
+    if (bytesReceived > 0) {
+        Serial.println(F("[isConnected] Data but no frame!"));
+        Serial.println(F("  Check: baud rate, TX/RX swap"));
+        delay(50);
+        
+        // Try to dump first few bytes
+        Serial.print(F("[isConnected] Hex: "));
+        uint8_t dumpCount = min((uint32_t)10, (uint32_t)_serial->available());
+        for (uint8_t i = 0; i < dumpCount && _serial->available(); i++) {
+            uint8_t b = _serial->read();
+            if (b < 0x10) Serial.print(F("0"));
+            Serial.print(b, HEX);
+            Serial.print(F(" "));
+        }
+        Serial.println();
+        delay(50);
+    } else {
+        Serial.println(F("[isConnected] NO DATA!"));
+        Serial.println(F("  Check: power, TX wire, GPIO pins"));
+        delay(50);
     }
     
     return false;
@@ -98,25 +189,28 @@ bool TF02Pro::readFrame(uint8_t* buffer) {
     uint32_t startTime = millis();
     int state = 0;
     int index = 0;
+    uint32_t bytesRead = 0;
     
     while (millis() - startTime < 100) {
         if (_serial->available()) {
             uint8_t byte = _serial->read();
+            bytesRead++;
             
             switch (state) {
-                case 0:  // Looking for first header byte
+                case 0:  // Looking for first header byte (0x59)
                     if (byte == TF02_FRAME_HEADER) {
                         buffer[0] = byte;
                         state = 1;
                     }
                     break;
                     
-                case 1:  // Looking for second header byte
+                case 1:  // Looking for second header byte (0x59)
                     if (byte == TF02_FRAME_HEADER) {
                         buffer[1] = byte;
                         index = 2;
                         state = 2;
                     } else {
+                        // Reset if second byte is not header
                         state = 0;
                     }
                     break;

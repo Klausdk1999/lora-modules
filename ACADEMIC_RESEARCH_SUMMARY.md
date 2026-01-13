@@ -78,7 +78,7 @@ This document summarizes the academic research findings that guide the sensor de
 1. **Range Requirement:** 22m range (indoor) / 12m (outdoor) suitable for larger rivers (thesis mentions Itajaí-Açu river)
 2. **Academic Validation:** santana_2024_development shows LiDAR works well for water monitoring
 3. **Interface:** UART provides flexibility and doesn't conflict with I2C bus
-4. **Temperature Compensation:** paul_2020_a findings implemented
+4. **Temperature Compensation:** Mohammed et al. (2019) and Tawalbeh et al. (2023) findings implemented - critical for sub-centimeter accuracy
 
 **Advantages:**
 - Extended range compared to TF-Luna (22m vs 8m)
@@ -205,7 +205,7 @@ This document summarizes the academic research findings that guide the sensor de
 - Secure enclosures against weather
 
 ### Environmental Factors
-- **Temperature:** Monitor and compensate (paul_2020_a)
+- **Temperature:** Monitor and compensate (Mohammed et al. 2019, Tawalbeh et al. 2023)
 - **Turbidity:** Higher turbidity improves LiDAR readings (tamari_2016_flash)
 - **Weather:** Waterproof enclosures for outdoor deployment
 - **Power:** Battery life estimates based on deep sleep strategy

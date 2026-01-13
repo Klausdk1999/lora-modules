@@ -18,7 +18,7 @@
  *   ECHO -> GPIO 12
  * 
  * Academic Findings Applied:
- * - JSN-SR04T validated for water level monitoring (mohammadrezamasoudimoghaddam_2024_a, Panagopoulos et al. 2021)
+ * - Ultrasonic sensors validated for water level monitoring (Mohammed et al. 2019, Tawalbeh et al. 2023)
  * - Temperature compensation critical: Mohammed et al. (2019) and Tawalbeh et al. (2023) show 1-2cm drift per 10°C without compensation
  * - Speed-of-sound formula: v(T) = 331.3 + 0.606 * θ (Mohammed et al. 2019, Tawalbeh et al. 2023)
  * - Statistical filtering for noise from turbulence/debris (Kabi et al. 2023)

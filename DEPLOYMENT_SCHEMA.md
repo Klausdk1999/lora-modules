@@ -219,7 +219,7 @@ Wake from Deep Sleep                Wake from Deep Sleep
     │                                    │
     ├─> Apply temperature                ├─> Calculate distance
     │   compensation                     │   (speed of sound)
-    │   (paul_2020_a)                    │
+    │   (Mohammed 2019, Tawalbeh 2023)   │
     │                                    │
     ├─> Format payload                   ├─> Format payload
     │   (8 bytes)                         │   (8 bytes)
