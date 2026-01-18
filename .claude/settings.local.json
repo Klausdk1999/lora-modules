@@ -4,7 +4,10 @@
       "Bash(arp:*)",
       "Bash(ipconfig:*)",
       "Bash(findstr:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(cd:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
