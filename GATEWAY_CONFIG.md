@@ -6,9 +6,11 @@ This guide explains how to configure the Wisgate Edge Pro gateway to receive dat
 
 ### 1. Access Gateway Web Interface
 
+**Current Gateway IP: `192.168.0.165`**
+
 1. Connect the Wisgate Edge Pro to your network via Ethernet or WiFi
 2. Find the gateway IP address (check router DHCP table or use RAK's discovery tool)
-3. Open a web browser and navigate to: `http://<gateway-ip>`
+3. Open a web browser and navigate to: `https://192.168.0.165`
 4. Default credentials:
    - Username: `admin`
    - Password: `admin` (change on first login)
