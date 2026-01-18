@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(arp:*)",
+      "Bash(ipconfig:*)",
+      "Bash(findstr:*)",
+      "Bash(curl:*)"
+    ]
+  }
+}
