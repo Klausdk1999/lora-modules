@@ -1,29 +1,33 @@
 /**
- * LilyGo LoRa32 - River Level Monitoring with TF02-Pro LiDAR
- * 
+ * LilyGo T-Beam V1.2 (AXP2101) - River Level Monitoring with TF02-Pro LiDAR
+ *
  * This node uses a Benewake TF02-Pro LiDAR sensor for distance measurement.
- * Sends real sensor data over LoRaWAN every 15 minutes with deep sleep power management.
- * 
+ * Sends real sensor data over LoRaWAN with deep sleep power management.
+ *
  * Configuration:
  * - Frequency: AU915 (Australia/Brazil)
- * - Sensor: TF02-Pro LiDAR (UART interface)
- * - Power: Battery powered from board's LiPo connector with deep sleep
- * - Transmission interval: 15 minutes (900 seconds) - production configuration
- * 
+ * - Sensor: TF02-Pro LiDAR (UART interface) - Requires 5V-12V power!
+ * - Power: 18650 battery (IMR18650) managed by AXP2101 PMIC
+ * - Adaptive transmission interval: 1-15 minutes based on water level changes
+ *
  * Wiring (TF02-Pro to T-Beam V1.2):
- *   VCC -> 5V (or 3.3V if sensor supports it)
+ *   VCC -> External 5V boost converter (TF02-Pro requires 5V-12V, 300mA peak)
  *   GND -> GND
- *   TX  -> GPIO 3 (RX pin for Serial2)
- *   RX  -> GPIO 1 (TX pin for Serial2)
- * 
- * Academic Findings Applied:
- * - Temperature compensation based on Mohammed et al. (2019) and Tawalbeh et al. (2023): critical for sub-centimeter accuracy (0.1% per °C deviation)
- * - Extended range (22m) for larger rivers (santana_2024_development)
+ *   TX  -> GPIO 13 (Serial2 RX)
+ *   RX  -> GPIO 14 (Serial2 TX)
+ *
+ * IMPORTANT: The TF02-Pro requires 5V-12V power supply!
+ * The T-Beam V1.2's 5V pin only provides power when USB is connected.
+ * For battery operation, you MUST use an external boost converter.
+ *
+ * Features:
+ * - AXP2101 PMIC for accurate battery monitoring via I2C
+ * - Adaptive sampling: faster when water level changes rapidly or exceeds threshold
+ * - Historical minimum tracking with NVS persistent storage
+ * - River level calculation from distance measurements
+ * - Temperature compensation based on Mohammed et al. (2019)
  * - Statistical filtering for noise reduction (Kabi et al. 2023)
- * - Median filtering and outlier removal for improved data quality
- * - Deep sleep for long-term battery operation (validated by Casals et al. 2017, Bouguera et al. 2018)
- * - Energy model validation: Casals et al. (2017) shows 2400mAh battery = 6-year lifespan with 5-min intervals at SF7
- * 
+ *
  * Author: Klaus Dieter Kupper
  * Project: Comparative Evaluation of Low-Cost IoT Sensors for River Level Monitoring
  */
@@ -33,19 +37,46 @@
 #include <hal/hal.h>
 #include <SPI.h>
 #include <HardwareSerial.h>
+#include <Preferences.h>  // NVS for persistent storage
 
-// Include the TF02-Pro sensor library (from ../lib/sensors via -I../lib/sensors in platformio.ini)
+// AXP2101 Power Management for T-Beam V1.2
+#define XPOWERS_CHIP_AXP2101
+#include <XPowersLib.h>
+
+// Include the TF02-Pro sensor library
 #include "TF02Pro/TF02Pro.h"
 
 // ============================================================================
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true    // Enable serial output for debugging
-#define TX_INTERVAL_SECONDS     60      // Send data every 1 minute (60 seconds) - reduced for testing
 #define SENSOR_WARMUP_MS        500     // Sensor warmup time
 #define NUM_READINGS_AVG        7       // Number of readings for median filtering (odd recommended)
 #define DEEP_SLEEP_ENABLED      true    // Enable deep sleep between transmissions
 #define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% deviation from median
+
+// ============================================================================
+// Adaptive Sampling Configuration
+// ============================================================================
+// Based on Ragnoli et al. (2020) adaptive duty cycling approach
+#define TX_INTERVAL_MIN_SEC     60      // Minimum interval: 1 minute (rapid change mode)
+#define TX_INTERVAL_NORMAL_SEC  900     // Normal interval: 15 minutes (standard operation)
+#define TX_INTERVAL_MAX_SEC     1800    // Maximum interval: 30 minutes (stable/low battery mode)
+
+// Thresholds for adaptive behavior
+#define CHANGE_THRESHOLD_CM     5.0f    // Level change in cm to trigger faster sampling
+#define CRITICAL_LEVEL_CM       50.0f   // River level (cm) above which we sample faster
+#define RAPID_CHANGE_CM         10.0f   // Change in cm that indicates rapid rise (alert condition)
+#define BATTERY_LOW_PERCENT     20      // Below this, use longer intervals to conserve power
+
+// ============================================================================
+// River Level Calculation
+// ============================================================================
+// The sensor measures distance FROM the sensor TO the water surface.
+// River level = Sensor height - measured distance
+// These values should be calibrated during installation
+#define DEFAULT_SENSOR_HEIGHT_CM  400.0f  // Height of sensor above riverbed (calibrate on install)
+#define HISTORICAL_MIN_KEY       "hist_min"  // NVS key for historical minimum distance
 
 // ============================================================================
 // Sensor Test Mode (Optional - for testing without LoRaWAN gateway)
@@ -99,17 +130,19 @@ const lmic_pinmap lmic_pins = {
 // T-Beam V1.2 pinout - WORKING CONFIGURATION:
 // GPIO 14 (TX) and GPIO 13 (RX) - TESTED AND WORKING
 // These pins avoid conflict with USB Serial (GPIO 1/3) and GPS (GPIO 12/34)
-// 
+//
 // Wiring:
 //   TF02-Pro TX -> GPIO 13 (Serial2 RX)
 //   TF02-Pro RX -> GPIO 14 (Serial2 TX)
-//   TF02-Pro VCC -> 5V
+//   TF02-Pro VCC -> External 5V boost converter (NOT from T-Beam 5V pin on battery!)
 //   TF02-Pro GND -> GND
 #define TF02_RX_PIN     13  // GPIO 13 for Serial2 RX (receives from TF02-Pro TX) - WORKING
 #define TF02_TX_PIN     14  // GPIO 14 for Serial2 TX (sends to TF02-Pro RX) - WORKING
 
-// Battery monitoring (if available on LilyGo board)
-#define BATTERY_ADC_PIN 35  // Common ADC pin for battery voltage (adjust if needed)
+// AXP2101 PMIC I2C pins (T-Beam V1.2)
+#define PMU_I2C_SDA     21  // I2C SDA for AXP2101
+#define PMU_I2C_SCL     22  // I2C SCL for AXP2101
+#define PMU_IRQ_PIN     35  // AXP2101 interrupt pin
 
 // Temperature sentinel value for invalid/unavailable readings
 #define INVALID_TEMPERATURE_VALUE -128  // Sentinel value for invalid temperature
@@ -120,6 +153,17 @@ const lmic_pinmap lmic_pins = {
 // Note: ESP32 already has Serial2 defined, so we use it directly
 // Serial2 is configured in setup() with begin() call
 TF02Pro lidarSensor(Serial2, TF02_RX_PIN, TF02_TX_PIN);
+
+// ============================================================================
+// AXP2101 Power Management Instance
+// ============================================================================
+XPowersAXP2101 pmu;
+bool pmuInitialized = false;
+
+// ============================================================================
+// NVS Persistent Storage
+// ============================================================================
+Preferences nvs;
 
 // ============================================================================
 // Timing and Status Variables
@@ -133,15 +177,27 @@ bool joinedNetwork = false;
 bool transmissionCompleted = false;  // Track if we've completed at least one transmission after join
 
 // ============================================================================
+// Adaptive Sampling State (stored in RTC memory to survive deep sleep)
+// ============================================================================
+RTC_DATA_ATTR float lastDistanceCm = 0.0f;       // Previous measurement for change detection
+RTC_DATA_ATTR float historicalMinDistCm = 9999.0f; // Historical minimum distance (lowest water = max distance)
+RTC_DATA_ATTR uint32_t currentIntervalSec = TX_INTERVAL_NORMAL_SEC;  // Current adaptive interval
+RTC_DATA_ATTR float sensorHeightCm = DEFAULT_SENSOR_HEIGHT_CM;  // Configurable sensor height
+
+// ============================================================================
 // Sensor Data Structure (for LoRa transmission)
 // ============================================================================
+// Extended payload with river level and adaptive sampling info
+// Total size: 12 bytes (fits well within LoRaWAN payload limits)
 struct __attribute__((packed)) SensorPayload {
-    uint8_t sensorType;         // 1 = TF02-Pro LiDAR
-    uint16_t distanceMm;        // Distance in millimeters
+    uint8_t sensorType;         // 1 = TF02-Pro LiDAR, 0xFF = error
+    uint16_t distanceMm;        // Distance to water in millimeters
+    uint16_t riverLevelMm;      // Calculated river level in millimeters
     int16_t signalStrength;     // Signal strength (flux)
     int8_t temperature;         // Temperature in Celsius (for compensation)
-    uint8_t batteryPercent;     // Battery level (0-100)
+    uint8_t batteryPercent;     // Battery level (0-100) from AXP2101
     uint8_t readingCount;       // Number of valid readings in average
+    uint8_t flags;              // Status flags: bit0=rapid_change, bit1=critical_level, bit2=battery_low
 };
 
 SensorPayload sensorData;
@@ -153,10 +209,19 @@ void onEvent(ev_t ev);
 void do_send(osjob_t* j);
 bool readSensorData();
 uint8_t getBatteryPercent();
+uint16_t getBatteryVoltage();
 float applyTemperatureCompensation(float rawDistance, int16_t sensorTemp);
 void enterDeepSleep(uint32_t sleepSeconds);
 float calculateMedian(float readings[], uint8_t count);
 float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct);
+
+// New functions for adaptive sampling and river level
+bool initPMU();
+uint32_t calculateAdaptiveInterval(float currentDistCm, uint8_t batteryPct);
+float calculateRiverLevel(float distanceCm);
+void updateHistoricalMinimum(float distanceCm);
+void loadCalibrationFromNVS();
+void saveCalibrationToNVS();
 
 // ============================================================================
 // Setup
@@ -167,11 +232,11 @@ void setup() {
     // ========================================================================
     Serial.begin(115200);
     delay(500);  // Give serial time to initialize
-    
+
     // Force flush to ensure data is sent
     Serial.flush();
     delay(100);
-    
+
     // Print debug messages immediately
     Serial.println(F("\n\n\n"));
     Serial.println(F("============================================="));
@@ -179,10 +244,10 @@ void setup() {
     Serial.println(F("============================================="));
     Serial.flush();
     delay(100);
-    
+
     // Check if we're waking from deep sleep
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-    
+
     Serial.print(F("Wakeup reason: "));
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         Serial.println(F("DEEP SLEEP TIMER"));
@@ -192,13 +257,32 @@ void setup() {
         Serial.println(F("EXT1"));
     } else {
         Serial.println(F("COLD BOOT / POWER ON"));
+        // On cold boot, load historical minimum from NVS
+        loadCalibrationFromNVS();
     }
     Serial.flush();
     delay(100);
-    
+
     Serial.println(F("\n============================================="));
-    Serial.println(F("LilyGo LoRa32 - TF02-Pro LiDAR Sensor Node"));
+    Serial.println(F("T-Beam V1.2 (AXP2101) - TF02-Pro LiDAR Node"));
     Serial.println(F("=============================================\n"));
+    Serial.flush();
+    delay(100);
+
+    // ========================================================================
+    // Initialize AXP2101 Power Management Unit
+    // ========================================================================
+    Serial.println(F("Initializing AXP2101 PMU..."));
+    if (initPMU()) {
+        Serial.println(F("✓ AXP2101 PMU initialized successfully"));
+        Serial.print(F("  Battery: "));
+        Serial.print(getBatteryVoltage());
+        Serial.print(F(" mV ("));
+        Serial.print(getBatteryPercent());
+        Serial.println(F("%)"));
+    } else {
+        Serial.println(F("✗ AXP2101 PMU NOT found! Battery readings unavailable"));
+    }
     Serial.flush();
     delay(100);
     
@@ -400,9 +484,11 @@ void loop() {
     if (DEEP_SLEEP_ENABLED && joinedNetwork && transmissionCompleted && !(LMIC.opmode & OP_TXRXPEND)) {
         // Small delay to ensure transmission is complete and RX windows closed
         delay(2000);  // Increased delay to allow RX windows to complete
-        Serial.println(F("\nEntering deep sleep..."));
+        Serial.print(F("\nEntering deep sleep for "));
+        Serial.print(currentIntervalSec);
+        Serial.println(F(" seconds (adaptive interval)..."));
         Serial.flush();
-        enterDeepSleep(TX_INTERVAL_SECONDS);
+        enterDeepSleep(currentIntervalSec);
     }
 #endif
 }
@@ -512,17 +598,53 @@ bool readSensorData() {
     int16_t avgStrength = sumStrength / validReadings;
     int8_t avgTemp = sumTemp / validReadings;
     
+    // Calculate river level from distance
+    float riverLevelCm = calculateRiverLevel(avgDistance);
+
+    // Update historical minimum (lowest water = maximum distance from sensor)
+    updateHistoricalMinimum(avgDistance);
+
+    // Get battery percentage
+    uint8_t batteryPct = getBatteryPercent();
+
+    // Calculate adaptive interval for next transmission
+    currentIntervalSec = calculateAdaptiveInterval(avgDistance, batteryPct);
+
+    // Build status flags
+    uint8_t flags = 0;
+    float changeFromLast = abs(avgDistance - lastDistanceCm);
+    if (changeFromLast >= RAPID_CHANGE_CM) {
+        flags |= 0x01;  // Bit 0: rapid change detected
+    }
+    if (riverLevelCm >= CRITICAL_LEVEL_CM) {
+        flags |= 0x02;  // Bit 1: critical level exceeded
+    }
+    if (batteryPct < BATTERY_LOW_PERCENT) {
+        flags |= 0x04;  // Bit 2: battery low
+    }
+
+    // Update last distance for next comparison
+    lastDistanceCm = avgDistance;
+
     // Fill payload structure
     sensorData.sensorType = 1;  // TF02-Pro
     sensorData.distanceMm = (uint16_t)(avgDistance * 10);  // Convert cm to mm
+    sensorData.riverLevelMm = (uint16_t)(riverLevelCm * 10);  // River level in mm
     sensorData.signalStrength = avgStrength;
     sensorData.temperature = avgTemp;
-    sensorData.batteryPercent = getBatteryPercent();
+    sensorData.batteryPercent = batteryPct;
     sensorData.readingCount = filteredCount;
-    
+    sensorData.flags = flags;
+
     Serial.println(F("\n--- Sensor Reading Summary ---"));
-    Serial.print(F("Filtered Distance: "));
+    Serial.print(F("Distance to water: "));
     Serial.print(avgDistance);
+    Serial.println(F(" cm"));
+    Serial.print(F("River level: "));
+    Serial.print(riverLevelCm);
+    Serial.println(F(" cm"));
+    Serial.print(F("Historical min dist: "));
+    Serial.print(historicalMinDistCm);
     Serial.println(F(" cm"));
     Serial.print(F("Signal Strength: "));
     Serial.println(avgStrength);
@@ -530,14 +652,25 @@ bool readSensorData() {
     Serial.print(avgTemp);
     Serial.println(F(" °C"));
     Serial.print(F("Battery: "));
-    Serial.print(sensorData.batteryPercent);
-    Serial.println(F(" %"));
+    Serial.print(batteryPct);
+    Serial.print(F("% ("));
+    Serial.print(getBatteryVoltage());
+    Serial.println(F(" mV)"));
     Serial.print(F("Valid readings: "));
     Serial.print(filteredCount);
     Serial.print(F("/"));
     Serial.println(validReadings);
+    Serial.print(F("Flags: 0x"));
+    Serial.print(flags, HEX);
+    if (flags & 0x01) Serial.print(F(" [RAPID_CHANGE]"));
+    if (flags & 0x02) Serial.print(F(" [CRITICAL_LEVEL]"));
+    if (flags & 0x04) Serial.print(F(" [BATTERY_LOW]"));
+    Serial.println();
+    Serial.print(F("Next interval: "));
+    Serial.print(currentIntervalSec);
+    Serial.println(F(" sec"));
     Serial.println(F("------------------------------"));
-    
+
     return true;
 }
 
@@ -560,32 +693,83 @@ float applyTemperatureCompensation(float rawDistance, int16_t sensorTemp) {
 }
 
 // ============================================================================
-// Get Battery Percentage
+// AXP2101 PMU Initialization
+// ============================================================================
+bool initPMU() {
+    // Initialize I2C for AXP2101
+    if (!pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, PMU_I2C_SDA, PMU_I2C_SCL)) {
+        Serial.println(F("  ERROR: AXP2101 not found on I2C bus"));
+        pmuInitialized = false;
+        return false;
+    }
+
+    // Verify chip ID (AXP2101 should return 0x47)
+    uint8_t chipId = pmu.getChipID();
+    Serial.print(F("  Chip ID: 0x"));
+    Serial.println(chipId, HEX);
+
+    if (chipId != 0x47) {
+        Serial.println(F("  WARNING: Unexpected chip ID (expected 0x47 for AXP2101)"));
+    }
+
+    // Enable battery detection and voltage measurement
+    pmu.enableBattDetection();
+    pmu.enableBattVoltageMeasure();
+    pmu.enableSystemVoltageMeasure();
+    pmu.enableVbusVoltageMeasure();
+
+    // Set charging parameters for IMR18650 battery
+    // IMR18650 typically: 3.7V nominal, 4.2V max, 2000-3000mAh
+    pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);  // Charge at 500mA
+    pmu.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);    // 4.2V full charge
+    pmu.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);  // 25mA termination
+    pmu.enableChargerTerminationLimit();  // Enable charge termination
+
+    // Set system minimum voltage (shutdown threshold)
+    pmu.setSysPowerDownVoltage(2600);  // 2.6V minimum
+
+    pmuInitialized = true;
+    return true;
+}
+
+// ============================================================================
+// Get Battery Percentage (from AXP2101)
 // ============================================================================
 uint8_t getBatteryPercent() {
-    // LilyGo boards may have battery voltage divider on ADC pin
-    // Typical range: 3.0V (empty) to 4.2V (full) for LiPo
-    // Formula: percentage = ((voltage - 3.0) / (4.2 - 3.0)) * 100
-    
-    #ifdef BATTERY_ADC_PIN
-        // Read battery voltage via ADC
-        int adcValue = analogRead(BATTERY_ADC_PIN);
-        
-        // Convert ADC reading to voltage
-        // ESP32 ADC: 12-bit (0-4095) with 3.3V reference
-        // If voltage divider is 2:1, multiply by 2
-        float voltage = (adcValue / 4095.0f) * 3.3f * 2.0f;  // Adjust multiplier if needed
-        
-        // Calculate percentage
-        if (voltage < 3.0f) return 0;
-        if (voltage > 4.2f) return 100;
-        
-        uint8_t percent = (uint8_t)(((voltage - 3.0f) / 1.2f) * 100.0f);
-        return percent;
-    #else
-        // Placeholder if battery monitoring not available
-        return 100;
-    #endif
+    if (!pmuInitialized) {
+        // Fallback: estimate from voltage if PMU not available
+        return 50;  // Return 50% as unknown
+    }
+
+    // Check if battery is connected
+    if (!pmu.isBatteryConnect()) {
+        Serial.println(F("  WARNING: No battery detected by AXP2101"));
+        return 0;
+    }
+
+    // Get percentage from AXP2101's fuel gauge
+    // Note: May be inaccurate at first use, improves after charge/discharge cycles
+    int percent = pmu.getBatteryPercent();
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    return (uint8_t)percent;
+}
+
+// ============================================================================
+// Get Battery Voltage (from AXP2101)
+// ============================================================================
+uint16_t getBatteryVoltage() {
+    if (!pmuInitialized) {
+        return 0;
+    }
+
+    if (!pmu.isBatteryConnect()) {
+        return 0;
+    }
+
+    // Returns voltage in millivolts
+    return pmu.getBattVoltage();
 }
 
 // ============================================================================
@@ -724,14 +908,21 @@ void do_send(osjob_t* j) {
     } else {
         // Send error indicator if sensor failed, but always include battery and temperature
         Serial.println(F("Sensor read failed, sending error packet with available data"));
-        
+
+        uint8_t batteryPct = getBatteryPercent();
+
         // Always populate battery and temperature in error payload
         sensorData.sensorType = 0xFF;  // Error indicator
         sensorData.distanceMm = 0;
+        sensorData.riverLevelMm = 0;
         sensorData.signalStrength = 0;
         sensorData.temperature = INVALID_TEMPERATURE_VALUE;  // Sentinel value for unavailable temp
-        sensorData.batteryPercent = getBatteryPercent();     // Always read battery
+        sensorData.batteryPercent = batteryPct;
         sensorData.readingCount = 0;
+        sensorData.flags = (batteryPct < BATTERY_LOW_PERCENT) ? 0x04 : 0x00;  // Set battery low flag if needed
+
+        // Use longer interval on error to conserve power
+        currentIntervalSec = TX_INTERVAL_NORMAL_SEC;
         
         Serial.print(F("  Error payload: Battery="));
         Serial.print(sensorData.batteryPercent);
@@ -828,16 +1019,17 @@ void onEvent(ev_t ev) {
             Serial.println(F(" dB"));
             
             // Schedule next transmission (or enter deep sleep)
+            // Use adaptive interval based on water level changes and battery
             if (DEEP_SLEEP_ENABLED) {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds (deep sleep)"));
+                Serial.print(currentIntervalSec);
+                Serial.println(F(" seconds (deep sleep, adaptive)"));
                 // Deep sleep will be entered in loop() after RX windows complete
             } else {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds"));
-                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL_SECONDS), do_send);
+                Serial.print(currentIntervalSec);
+                Serial.println(F(" seconds (adaptive)"));
+                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(currentIntervalSec), do_send);
             }
             break;
             
@@ -855,4 +1047,158 @@ void onEvent(ev_t ev) {
             Serial.println((unsigned)ev);
             break;
     }
+}
+
+// ============================================================================
+// Calculate Adaptive Sampling Interval
+// Based on Ragnoli et al. (2020) adaptive duty cycling approach
+// ============================================================================
+uint32_t calculateAdaptiveInterval(float currentDistCm, uint8_t batteryPct) {
+    // Calculate river level for threshold checks
+    float riverLevel = calculateRiverLevel(currentDistCm);
+
+    // Calculate change from last reading
+    float changeFromLast = abs(currentDistCm - lastDistanceCm);
+
+    Serial.println(F("\n--- Adaptive Interval Calculation ---"));
+    Serial.print(F("  Change from last: "));
+    Serial.print(changeFromLast);
+    Serial.println(F(" cm"));
+    Serial.print(F("  River level: "));
+    Serial.print(riverLevel);
+    Serial.println(F(" cm"));
+    Serial.print(F("  Battery: "));
+    Serial.print(batteryPct);
+    Serial.println(F("%"));
+
+    // Priority 1: Battery conservation mode
+    if (batteryPct < BATTERY_LOW_PERCENT) {
+        Serial.println(F("  -> BATTERY_LOW: Using maximum interval"));
+        return TX_INTERVAL_MAX_SEC;
+    }
+
+    // Priority 2: Rapid change detection (flood warning)
+    if (changeFromLast >= RAPID_CHANGE_CM) {
+        Serial.println(F("  -> RAPID_CHANGE: Using minimum interval"));
+        return TX_INTERVAL_MIN_SEC;
+    }
+
+    // Priority 3: Critical level monitoring
+    if (riverLevel >= CRITICAL_LEVEL_CM) {
+        Serial.println(F("  -> CRITICAL_LEVEL: Using minimum interval"));
+        return TX_INTERVAL_MIN_SEC;
+    }
+
+    // Priority 4: Moderate change detection
+    if (changeFromLast >= CHANGE_THRESHOLD_CM) {
+        // Scale interval based on change magnitude
+        // More change = shorter interval
+        float changeRatio = changeFromLast / RAPID_CHANGE_CM;
+        if (changeRatio > 1.0f) changeRatio = 1.0f;
+
+        uint32_t interval = TX_INTERVAL_NORMAL_SEC -
+                           (uint32_t)((TX_INTERVAL_NORMAL_SEC - TX_INTERVAL_MIN_SEC) * changeRatio);
+        Serial.print(F("  -> MODERATE_CHANGE: Using interval "));
+        Serial.print(interval);
+        Serial.println(F(" sec"));
+        return interval;
+    }
+
+    // Default: Normal interval for stable conditions
+    Serial.println(F("  -> STABLE: Using normal interval"));
+    return TX_INTERVAL_NORMAL_SEC;
+}
+
+// ============================================================================
+// Calculate River Level from Distance
+// River level = Sensor height - measured distance
+// ============================================================================
+float calculateRiverLevel(float distanceCm) {
+    // The sensor measures distance TO the water surface
+    // River level = how high the water is from the riverbed
+    // River level = Sensor height above riverbed - distance to water
+
+    // If distance is greater than sensor height, water is below our reference point
+    if (distanceCm >= sensorHeightCm) {
+        return 0.0f;  // River level at or below reference
+    }
+
+    float riverLevel = sensorHeightCm - distanceCm;
+    return riverLevel;
+}
+
+// ============================================================================
+// Update Historical Minimum Distance
+// The minimum distance = maximum water level recorded
+// ============================================================================
+void updateHistoricalMinimum(float distanceCm) {
+    // Lower distance = higher water level (more important for flood detection)
+    // We track the MINIMUM distance (maximum water level) seen
+    if (distanceCm < historicalMinDistCm && distanceCm > 0) {
+        Serial.print(F("  New historical minimum distance: "));
+        Serial.print(distanceCm);
+        Serial.print(F(" cm (was "));
+        Serial.print(historicalMinDistCm);
+        Serial.println(F(" cm)"));
+
+        historicalMinDistCm = distanceCm;
+
+        // Save to NVS periodically (every time we get a new minimum)
+        saveCalibrationToNVS();
+    }
+}
+
+// ============================================================================
+// Load Calibration Data from NVS (Non-Volatile Storage)
+// ============================================================================
+void loadCalibrationFromNVS() {
+    Serial.println(F("Loading calibration from NVS..."));
+
+    nvs.begin("rivermon", false);  // Read-write mode
+
+    // Load historical minimum distance
+    if (nvs.isKey(HISTORICAL_MIN_KEY)) {
+        historicalMinDistCm = nvs.getFloat(HISTORICAL_MIN_KEY, 9999.0f);
+        Serial.print(F("  Loaded historical min: "));
+        Serial.print(historicalMinDistCm);
+        Serial.println(F(" cm"));
+    } else {
+        Serial.println(F("  No historical min found, using default"));
+        historicalMinDistCm = 9999.0f;
+    }
+
+    // Load sensor height calibration if available
+    if (nvs.isKey("sensor_height")) {
+        sensorHeightCm = nvs.getFloat("sensor_height", DEFAULT_SENSOR_HEIGHT_CM);
+        Serial.print(F("  Loaded sensor height: "));
+        Serial.print(sensorHeightCm);
+        Serial.println(F(" cm"));
+    } else {
+        Serial.print(F("  Using default sensor height: "));
+        Serial.print(DEFAULT_SENSOR_HEIGHT_CM);
+        Serial.println(F(" cm"));
+        sensorHeightCm = DEFAULT_SENSOR_HEIGHT_CM;
+    }
+
+    nvs.end();
+}
+
+// ============================================================================
+// Save Calibration Data to NVS
+// ============================================================================
+void saveCalibrationToNVS() {
+    Serial.println(F("Saving calibration to NVS..."));
+
+    nvs.begin("rivermon", false);
+
+    // Save historical minimum
+    nvs.putFloat(HISTORICAL_MIN_KEY, historicalMinDistCm);
+    Serial.print(F("  Saved historical min: "));
+    Serial.print(historicalMinDistCm);
+    Serial.println(F(" cm"));
+
+    // Save sensor height (in case it was modified)
+    nvs.putFloat("sensor_height", sensorHeightCm);
+
+    nvs.end();
 }

@@ -1,5 +1,5 @@
 /**
- * LilyGo LoRa32 - Simple LoRaWAN Test with Random Data
+ * LilyGo T-Beam AXP2101 v1.2 - Simple LoRaWAN Test with Random Data
  * 
  * Simple code that connects to LoRaWAN and sends random data packets
  * 
@@ -78,7 +78,7 @@ void setup() {
     delay(1000);
     
     Serial.println(F("\n\n============================================"));
-    Serial.println(F("LilyGo LoRa32 - LoRaWAN Test"));
+    Serial.println(F("LilyGo T-Beam AXP2101 v1.2 - LoRaWAN Test"));
     Serial.println(F("============================================\n"));
     
     // Initialize LMIC
