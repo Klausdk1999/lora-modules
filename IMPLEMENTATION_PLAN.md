@@ -10,17 +10,17 @@ This document outlines the step-by-step implementation plan for deploying the Lo
 #### 1.1 Hardware Assembly
 - [ ] Verify all components received:
   - [ ] Heltec WiFi LoRa 32 V2 board
-  - [ ] LilyGo LoRa32 board
-  - [ ] 2x Benewake TF-Luna sensors
+  - [ ] LilyGo T-Beam AXP2101 v1.2 board
+  - [ ] Benewake TF02-Pro sensor
   - [ ] Wisgate Edge Pro gateway
   - [ ] Antennas (LoRa frequency appropriate)
   - [ ] Power supplies/batteries
   - [ ] Cables and connectors
 
 #### 1.2 Individual Component Testing
-- [ ] **TF-Luna Sensor Testing:**
-  - [ ] Connect sensor to test board (Arduino/ESP32)
-  - [ ] Verify I2C communication
+- [ ] **TF02-Pro Sensor Testing:**
+  - [ ] Connect sensor to test board (ESP32 UART)
+  - [ ] Verify UART communication
   - [ ] Test distance measurements
   - [ ] Calibrate if needed
   - [ ] Document baseline performance
@@ -39,10 +39,9 @@ This document outlines the step-by-step implementation plan for deploying the Lo
   - [ ] Check battery monitoring circuit
 
 #### 1.3 Integration Testing
-- [ ] Connect TF-Luna to Heltec board
-- [ ] Connect TF-Luna to LilyGo board
-- [ ] Verify sensor readings on both boards
-- [ ] Test I2C communication stability
+- [ ] Connect TF02-Pro to T-Beam (UART)
+- [ ] Verify sensor readings on T-Beam
+- [ ] Test UART communication stability
 
 ### Phase 2: Gateway Configuration (Week 1-2)
 
@@ -83,7 +82,7 @@ This document outlines the step-by-step implementation plan for deploying the Lo
 #### 3.2 Heltec Node Firmware
 - [ ] Configure LoRaWAN credentials
 - [ ] Test LoRaWAN join procedure
-- [ ] Integrate TF-Luna sensor reading
+- [ ] Integrate JSN-SR04T ultrasonic reading
 - [ ] Implement data packet formatting
 - [ ] Add error handling
 - [ ] Test transmission cycle
@@ -94,7 +93,7 @@ This document outlines the step-by-step implementation plan for deploying the Lo
 - [ ] Configure LoRaWAN credentials
 - [ ] Adjust pin mappings if needed
 - [ ] Test LoRaWAN join procedure
-- [ ] Integrate TF-Luna sensor reading
+- [ ] Integrate TF02-Pro sensor reading
 - [ ] Implement data packet formatting
 - [ ] Add error handling
 - [ ] Test transmission cycle
@@ -146,7 +145,7 @@ This document outlines the step-by-step implementation plan for deploying the Lo
 
 #### 5.2 Installation
 - [ ] Mount sensor nodes
-- [ ] Position TF-Luna sensors correctly
+- [ ] Position TF02-Pro sensors correctly
 - [ ] Connect power supplies
 - [ ] Install antennas
 - [ ] Secure enclosures

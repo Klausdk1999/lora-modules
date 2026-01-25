@@ -74,7 +74,7 @@ You are tasked with searching for academic publications related to a Master's th
 - "ESP32" AND "LoRa" AND "battery life"
 - "ESP32" AND "LoRa" AND "power management"
 - "ESP32" AND "LoRa module" AND "energy efficiency"
-- "Heltec LoRa32" OR "LilyGo LoRa32" AND "power"
+- "Heltec LoRa32" OR "LilyGo T-Beam AXP2101" AND "power"
 
 **What We're Missing:**
 - Specific validation studies of ESP32 deep sleep with LoRa modules

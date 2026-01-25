@@ -37,17 +37,17 @@ This document describes the complete system architecture for the river level mon
             │                       │                       │
     ┌───────▼────────┐      ┌───────▼────────┐      ┌───────▼────────┐
     │   Node 1       │      │   Node 2       │      │  Future Nodes  │
-    │  LilyGo LoRa32 │      │  Heltec V2     │      │   (Scalable)   │
+    │  T-Beam AXP2101│      │  Heltec V2     │      │   (Scalable)   │
     └────────────────┘      └────────────────┘      └────────────────┘
 ```
 
-## Node 1: LilyGo LoRa32 + TF02-Pro LiDAR
+## Node 1: LilyGo T-Beam AXP2101 v1.2 + TF02-Pro LiDAR
 
 ### Hardware Components
 
 ```
 ┌─────────────────────────────────────────────┐
-│         LilyGo LoRa32 Node                  │
+│   LilyGo T-Beam AXP2101 v1.2 Node           │
 │                                             │
 │  ┌──────────────────────────────────────┐  │
 │  │  ESP32 Dual-Core Microcontroller      │  │
@@ -64,7 +64,7 @@ This document describes the complete system architecture for the river level mon
 │                                             │
 │  ┌──────────────────────────────────────┐  │
 │  │  TF02-Pro LiDAR Sensor (UART)        │  │
-│  │  - Interface: Serial2 (GPIO 16/17)     │  │
+│  │  - Interface: Serial2 (GPIO 13/14)    │  │
 │  │  - Range: 0.1m - 22m (indoor)        │  │
 │  │  - Range: 0.1m - 12m (outdoor)       │  │
 │  │  - Accuracy: ±1cm (0.1-6m)           │  │
@@ -73,10 +73,16 @@ This document describes the complete system architecture for the river level mon
 │  └──────────────────────────────────────┘  │
 │                                             │
 │  ┌──────────────────────────────────────┐  │
-│  │  LiPo Battery (2000mAh)               │  │
+│  │  18650 Battery (T-Beam)               │  │
 │  │  - Voltage: 3.7V                      │  │
 │  │  - Connector: JST-PH 2.0              │  │
 │  │  - Estimated Life: 6-12 months        │  │
+│  └──────────────────────────────────────┘  │
+│                                             │
+│  ┌──────────────────────────────────────┐  │
+│  │  18650 + 5V Boost (TF02-Pro)          │  │
+│  │  - 5V output to TF02-Pro VCC          │  │
+│  │  - Common ground with T-Beam          │  │
 │  └──────────────────────────────────────┘  │
 │                                             │
 │  ┌──────────────────────────────────────┐  │

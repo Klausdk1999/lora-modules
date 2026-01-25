@@ -4,9 +4,9 @@ This document provides complete wiring diagrams for connecting sensors to both H
 
 ## Testing Groups Configuration
 
-### Group A: LilyGo LoRa32 - LiDAR Testing
-- **Board:** LilyGo LoRa32 (T3 v1.6 or T-Beam)
-- **Power:** Direct battery from board's LiPo connector
+### Group A: LilyGo T-Beam AXP2101 v1.2 - LiDAR Testing
+- **Board:** LilyGo T-Beam AXP2101 v1.2
+- **Power:** 18650 battery to T-Beam + separate 18650 to 5V boost for TF02-Pro
 - **Sensor:** TF02-Pro LiDAR (UART) - Extended range for larger rivers
 
 ### Group B: Heltec WiFi LoRa 32 V2 - Ultrasonic Testing
@@ -43,28 +43,28 @@ This document provides complete wiring diagrams for connecting sensors to both H
      5V  Data Data GND
 ```
 
-### Wiring to LilyGo LoRa32 (UART - Serial2)
+### Wiring to LilyGo T-Beam AXP2101 v1.2 (UART - Serial2)
 
 ```
-TF02-Pro Sensor            LilyGo LoRa32
+TF02-Pro Sensor            LilyGo T-Beam AXP2101 v1.2
 ═══════════════            ═════════════
-     VCC   ─────────────────>  5V (or 3.3V if sensor supports it)
+     VCC   ─────────────────>  5V boost output (external)
      GND   ─────────────────>  GND
-     TX    ─────────────────>  GPIO 16 (Serial2 RX)
-     RX    ─────────────────>  GPIO 17 (Serial2 TX)
+     TX    ─────────────────>  GPIO 13 (Serial2 RX)
+     RX    ─────────────────>  GPIO 14 (Serial2 TX)
 ```
 
 **Physical Connection Diagram:**
 ```
                     ┌──────────────────────────────────┐
-   TF02-Pro         │        LilyGo LoRa32             │
+   TF02-Pro         │   LilyGo T-Beam AXP2101 v1.2      │
  ┌─────────┐         │                                  │
  │   ┌─┐   │         │  ┌────────────────────────────┐  │
  │   └─┘   │         │  │  LoRa Antenna Connector    │  │
  │         │         │  └────────────────────────────┘  │
- │  VCC ───┼─Red─────┼───> 5V                           │
- │  TX  ───┼─Blue────┼───> GPIO 16 (Serial2 RX)         │
- │  RX  ───┼─Yellow──┼───> GPIO 17 (Serial2 TX)        │
+│  VCC ───┼─Red─────┼───> 5V boost output (external)   │
+│  TX  ───┼─Blue────┼───> GPIO 13 (Serial2 RX)         │
+│  RX  ───┼─Yellow──┼───> GPIO 14 (Serial2 TX)         │
  │  GND ───┼─Black───┼───> GND                          │
  └─────────┘         │                                  │
                      │        [USB-C Port]              │
@@ -302,8 +302,8 @@ AJ-SR04M Sensor             Heltec or LilyGo
 
 | Pin | Function | Used By |
 |-----|----------|---------|
-| GPIO 16 | Serial2 RX | **TF02-Pro TX (UART)** |
-| GPIO 17 | Serial2 TX | **TF02-Pro RX (UART)** |
+| GPIO 13 | Serial2 RX | **TF02-Pro TX (UART)** |
+| GPIO 14 | Serial2 TX | **TF02-Pro RX (UART)** |
 | GPIO 21 | I2C SDA | Alternative: TF-Luna SDA (if using I2C) |
 | GPIO 22 | I2C SCL | Alternative: TF-Luna SCL (if using I2C) |
 | GPIO 12 | Digital I/O | Available |
@@ -336,24 +336,31 @@ AJ-SR04M Sensor             Heltec or LilyGo
 
 ## Power Configuration
 
-### LilyGo LoRa32 with Direct Battery
+### LilyGo T-Beam AXP2101 v1.2 with Two Batteries
 ```
 ┌─────────────────────────────────────────┐
-│           LilyGo LoRa32                 │
+│   LilyGo T-Beam AXP2101 v1.2            │
 │  ┌─────────────────────────────────┐    │
 │  │    LiPo Battery Connector       │    │
 │  │         (JST-PH 2.0)            │    │
 │  └───────────┬─────────────────────┘    │
 │              │                          │
 │    ┌─────────┴─────────┐                │
-│    │   LiPo Battery    │                │
-│    │   3.7V 1000mAh+   │                │
+│    │   18650 Battery   │                │
+│    │   (3.7V)          │                │
 │    └───────────────────┘                │
 │                                         │
-│  ✓ Built-in charging via USB-C         │
-│  ✓ Battery monitoring available        │
+│  ✓ Built-in charging via USB-C          │
+│  ✓ Battery monitoring via AXP2101       │
 └─────────────────────────────────────────┘
 ```
+
+**External 5V for TF02-Pro (second 18650 + boost):**
+```
+18650 (3.7V) → 5V boost module → TF02-Pro VCC
+GND (boost)  → GND (T-Beam + TF02-Pro)
+```
+**Note:** The T-Beam 5V pin is only active with USB. Use the external boost for battery-only operation.
 
 ### Heltec with External Battery Board
 ```
@@ -442,7 +449,7 @@ AJ-SR04M Sensor             Heltec or LilyGo
 
 ### For TF02-Pro (UART - Primary):
 ```
-VCC → 5V | TX → GPIO 16 (Serial2 RX) | RX → GPIO 17 (Serial2 TX) | GND → GND
+VCC → 5V boost output | TX → GPIO 13 (Serial2 RX) | RX → GPIO 14 (Serial2 TX) | GND → GND
 ```
 
 ### For TF-Luna (I2C - Alternative):

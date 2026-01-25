@@ -7,8 +7,8 @@ This guide will help you get started quickly with the LoRa river level monitorin
 
 1. **Hardware:**
    - Heltec WiFi LoRa 32 V2 board
-   - LilyGo LoRa32 board
-   - 2x Benewake TF-Luna sensors
+   - LilyGo T-Beam AXP2101 v1.2 board
+   - Benewake TF02-Pro sensor
    - Wisgate Edge Pro gateway
    - USB cables for programming
    - Antennas (matching your frequency band)
@@ -74,12 +74,12 @@ This guide will help you get started quickly with the LoRa river level monitorin
    #define CFG_eu868 1  // Change to your region
    ```
 
-#### For LilyGo Board:
+#### For LilyGo Board (T-Beam AXP2101 v1.2):
 
 1. Open `LoRa-River-Monitoring/lilygo-lora32/` in PlatformIO
-2. **IMPORTANT:** Identify your specific LilyGo model and verify pin configuration
+2. **IMPORTANT:** This project uses T-Beam AXP2101 v1.2 with TF02-Pro on GPIO 13/14
 3. Edit `src/main.cpp` with your credentials (same format as Heltec)
-4. Adjust pin mappings in `lmic_pins` if your board differs
+4. Use external 5V boost for TF02-Pro if running on battery
 5. Update region in `src/lmic_project_config.h`
 
 ### Step 5: Build, Upload, and Test
@@ -113,7 +113,8 @@ pio device monitor
 ## ✅ Verification Checklist
 
 ### Hardware Connections
-- [ ] TF-Luna sensor connected (VCC, GND, SDA, SCL)
+- [ ] TF02-Pro sensor connected (VCC, GND, TX, RX)
+- [ ] 5V boost connected for TF02-Pro (battery-only)
 - [ ] LoRa antenna connected
 - [ ] Board powered (USB or battery)
 - [ ] Serial monitor shows initialization messages
@@ -145,12 +146,12 @@ pio device monitor
   - Verify gateway is online
   - Check frequency plan matches
 
-### "TF-Luna sensor not detected"
+### "TF02-Pro sensor not detected"
 - **Cause:** Wiring issue or power problem
 - **Solution:**
-  - Check I2C connections (SDA/SCL)
-  - Verify 3.3V power supply
-  - Test with I2C scanner sketch
+  - Check UART connections (TX/RX)
+  - Verify 5V boost output
+  - Confirm baud rate and Serial2 init
 
 ### No data in network server
 - **Cause:** Join not completed or transmission issue

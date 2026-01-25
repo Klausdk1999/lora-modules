@@ -33,7 +33,7 @@ This document provides a visual and textual description of the complete system a
         │                      │                        │
 ┌───────▼────────┐    ┌────────▼─────────┐    ┌─────────▼────────┐
 │  Node 1        │    │  Node 2          │    │  Future Nodes   │
-│  LilyGo LoRa32 │    │  Heltec LoRa32   │    │  (Scalable)     │
+│  T-Beam AXP2101│    │  Heltec LoRa32   │    │  (Scalable)     │
 │                │    │  V2              │    │                 │
 │  ┌──────────┐  │    │  ┌────────────┐  │    │                 │
 │  │ ESP32    │  │    │  │ ESP32      │  │    │                 │
@@ -62,7 +62,7 @@ This document provides a visual and textual description of the complete system a
                       └──────────────────┘    └─────────────────┘
 ```
 
-## Node 1: LilyGo LoRa32 + TF02-Pro LiDAR
+## Node 1: LilyGo T-Beam AXP2101 v1.2 + TF02-Pro LiDAR
 
 ### Physical Configuration
 
@@ -71,7 +71,7 @@ This document provides a visual and textual description of the complete system a
                     │   Weatherproof Enclosure      │
                     │                               │
                     │  ┌────────────────────────┐  │
-                    │  │   LilyGo LoRa32        │  │
+                    │  │   T-Beam AXP2101 v1.2  │  │
                     │  │                        │  │
                     │  │  ┌──────────────────┐  │  │
                     │  │  │  ESP32 MCU       │  │  │
@@ -79,8 +79,8 @@ This document provides a visual and textual description of the complete system a
                     │  │  └──────────────────┘  │  │
                     │  │                        │  │
                     │  │  ┌──────────────────┐  │  │
-                    │  │  │  LiPo Battery    │  │  │
-                    │  │  │  (2000mAh)       │  │  │
+                    │  │  │  18650 Battery   │  │  │
+                    │  │  │  (T-Beam)        │  │  │
                     │  │  └──────────────────┘  │  │
                     │  └────────────────────────┘  │
                     │                               │
@@ -106,30 +106,34 @@ This document provides a visual and textual description of the complete system a
 ### Wiring Details
 
 ```
-TF02-Pro Sensor          LilyGo LoRa32
+TF02-Pro Sensor          T-Beam AXP2101 v1.2
 ═══════════════          ═════════════
-VCC (Red)        ──────> 5V
-TX  (Blue)       ──────> GPIO 16 (Serial2 RX)
-RX  (Yellow)     ──────> GPIO 17 (Serial2 TX)
+VCC (Red)        ──────> 5V boost output
+TX  (Blue)       ──────> GPIO 13 (Serial2 RX)
+RX  (Yellow)     ──────> GPIO 14 (Serial2 TX)
 GND (Black)      ──────> GND
 
-Battery          ──────> JST-PH 2.0 Connector
+Battery (T-Beam) ──────> JST-PH 2.0 Connector
+Battery (Boost)  ──────> 5V Boost Module
 Antenna          ──────> U.FL/SMA Connector
 ```
 
 ### Power Flow
 
 ```
-LiPo Battery (3.7V, 2000mAh)
+18650 Battery (3.7V, T-Beam)
     │
-    ├──> LilyGo Board (3.3V/5V regulation)
+    ├──> T-Beam Board (3.3V regulation)
     │    │
     │    ├──> ESP32 MCU
     │    ├──> LoRa Module (SX1276/8)
-    │    └──> TF02-Pro Sensor (5V)
     │
-    └──> Battery Life: 6-12 months
-         (with 15min intervals, deep sleep)
+18650 Battery (3.7V, Boost)
+    │
+    └──> 5V Boost Module ──> TF02-Pro Sensor (5V)
+
+Battery Life: 6-12 months
+(with 15min intervals, deep sleep)
 ```
 
 ## Node 2: Heltec LoRa32 V2 + JSN-SR04T Ultrasonic
@@ -357,7 +361,7 @@ Battery Life: 6-12 months (2000mAh LiPo)
 - **LoRa:** SX1276/8 (915MHz AU915)
 - **Sensor:** TF02-Pro LiDAR (UART, 22m range)
 - **Power:** Direct LiPo (2000mAh)
-- **Interface:** UART (Serial2, GPIO 16/17)
+- **Interface:** UART (Serial2, GPIO 13/14)
 - **Battery Life:** 6-12 months
 
 ### Node 2 (Heltec + JSN-SR04T)

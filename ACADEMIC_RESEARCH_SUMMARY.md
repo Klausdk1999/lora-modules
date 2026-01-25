@@ -72,7 +72,7 @@ This document summarizes the academic research findings that guide the sensor de
 
 ## Sensor Selection Rationale
 
-### Node 1: LilyGo LoRa32 + TF02-Pro LiDAR
+### Node 1: LilyGo T-Beam AXP2101 v1.2 + TF02-Pro LiDAR
 
 **Selection Criteria:**
 1. **Range Requirement:** 22m range (indoor) / 12m (outdoor) suitable for larger rivers (thesis mentions Itajaí-Açu river)

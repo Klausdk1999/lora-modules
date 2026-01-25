@@ -32,7 +32,7 @@ This document lists all the files you need to check before starting hardware ass
 **File:** `lilygo-lora32/README.md`
 - **Purpose:** Complete hardware specification for LilyGo board
 - **Key Information:**
-  - TF02-Pro UART pin configuration (GPIO 16/17)
+  - TF02-Pro UART pin configuration (GPIO 13/14)
   - LoRa module pin variations by model
   - Battery monitoring pin (GPIO 35)
   - Important: Board model identification guide
@@ -55,8 +55,8 @@ This document lists all the files you need to check before starting hardware ass
   - Lines 77-82: LoRa module pins (lmic_pins structure)
   - Lines 85-86: TF02-Pro UART pins
     ```cpp
-    #define TF02_RX_PIN     16  // GPIO 16 for Serial2 RX
-    #define TF02_TX_PIN     17  // GPIO 17 for Serial2 TX
+    #define TF02_RX_PIN     13  // GPIO 13 for Serial2 RX
+    #define TF02_TX_PIN     14  // GPIO 14 for Serial2 TX
     ```
   - Line 89: Battery monitoring pin
 
@@ -96,14 +96,14 @@ This document lists all the files you need to check before starting hardware ass
 | **Battery Monitoring** |
 | Battery ADC | - | GPIO 37 | VBAT_SENSE |
 
-### LilyGo LoRa32 (LiDAR Node)
+### LilyGo T-Beam AXP2101 v1.2 (LiDAR Node)
 
 | Component | Pin | GPIO | Notes |
 |-----------|-----|------|-------|
 | **TF02-Pro LiDAR (UART)** |
-| TX | - | GPIO 16 | Serial2 RX on ESP32 |
-| RX | - | GPIO 17 | Serial2 TX on ESP32 |
-| VCC | - | 5V | Power (3.3V if supported) |
+| TX | - | GPIO 13 | Serial2 RX on ESP32 |
+| RX | - | GPIO 14 | Serial2 TX on ESP32 |
+| VCC | - | 5V | Power from external boost |
 | GND | - | GND | Ground |
 | **LoRa Module (Integrated)** |
 | NSS | - | GPIO 18 | Chip select |
@@ -114,7 +114,7 @@ This document lists all the files you need to check before starting hardware ass
 | **Battery Monitoring** |
 | Battery ADC | - | GPIO 35 | Varies by model |
 
-**⚠️ IMPORTANT:** LilyGo LoRa32 pin configurations vary by model. Always verify your specific board model before wiring!
+**⚠️ IMPORTANT:** LilyGo pin configurations vary by model. Always verify your specific board model before wiring!
 
 ---
 
@@ -159,8 +159,8 @@ Before starting hardware assembly, verify:
 - **Critical:** Without this, ultrasonic readings will have reduced accuracy
 
 ### 2. **TF02-Pro UART Connection**
-- **TX (sensor) → RX (ESP32):** GPIO 16 (Serial2 RX)
-- **RX (sensor) → TX (ESP32):** GPIO 17 (Serial2 TX)
+- **TX (sensor) → RX (ESP32):** GPIO 13 (Serial2 RX)
+- **RX (sensor) → TX (ESP32):** GPIO 14 (Serial2 TX)
 - **Note:** UART connection, not I2C - verify Serial2 initialization
 
 ### 3. **JSN-SR04T Ultrasonic**
@@ -170,6 +170,11 @@ Before starting hardware assembly, verify:
 ### 4. **Battery Monitoring**
 - **Heltec:** GPIO 37 has built-in voltage divider
 - **LilyGo:** GPIO 35 (varies by model - check your board!)
+
+### 5. **TF02-Pro Power (Two-Battery Setup)**
+- **Battery 1:** 18650 to T-Beam battery connector
+- **Battery 2:** 18650 to 5V boost converter → TF02-Pro VCC
+- **Common ground:** Boost GND ↔ T-Beam GND ↔ Sensor GND
 
 ### 5. **LoRa Antenna**
 - **Required:** Must be connected before powering on

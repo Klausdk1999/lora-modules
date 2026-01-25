@@ -14,9 +14,9 @@
  *   - GND -> GND
  * 
  * TF02-Pro (UART):
- *   - RX -> GPIO 16 (ESP TX)
- *   - TX -> GPIO 17 (ESP RX)
- *   - VCC -> 5V
+ *   - RX -> GPIO 14 (ESP TX)
+ *   - TX -> GPIO 13 (ESP RX)
+ *   - VCC -> 5V (external boost if battery-only)
  *   - GND -> GND
  * 
  * HC-SR04:
@@ -43,8 +43,8 @@
 
 // I2C is on default pins (21, 22)
 // TF02-Pro UART pins
-#define TF02_RX_PIN     17  // ESP32 receives on this pin (connect to TF02 TX)
-#define TF02_TX_PIN     16  // ESP32 transmits on this pin (connect to TF02 RX)
+#define TF02_RX_PIN     13  // ESP32 receives on this pin (connect to TF02 TX)
+#define TF02_TX_PIN     14  // ESP32 transmits on this pin (connect to TF02 RX)
 
 // HC-SR04 pins
 #define HCSR04_TRIG     4

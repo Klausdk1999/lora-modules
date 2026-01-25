@@ -11,6 +11,18 @@ This folder contains the firmware for the LilyGo T-Beam AXP2101 v1.2 board (FCC 
 - **Sensor:** TF02-Pro LiDAR sensor (UART interface, 22m range)
 - **Note:** TF02-Pro has internal temperature sensor, no external temperature sensor needed
 
+## 🔋 Power Setup (Two 18650 Batteries)
+
+This node currently uses two separate 18650 cells:
+
+- **Battery 1 (T-Beam):** 18650 connected to the T-Beam battery connector (3.7V)
+- **Battery 2 (TF02-Pro):** 18650 feeding a 5V boost converter for the TF02-Pro
+
+**Important:**
+- The T-Beam 5V pin is only active when USB is connected.
+- The TF02-Pro requires 5V–12V and can draw up to 300mA peak.
+- **All grounds must be common** (boost GND ↔ T-Beam GND ↔ sensor GND).
+
 ## ⚠️ Important Note
 
 This firmware is configured for the **LilyGo T-Beam AXP2101 v1.2** board. The LoRaWAN configuration has been carefully tested and is working correctly. **Do not modify the LoRaWAN-related code** without understanding the implications.
@@ -22,7 +34,7 @@ If you have a different LilyGo/TTGO board variant, you may need to adjust the pi
 ### TF02-Pro LiDAR Sensor (UART) - WORKING CONFIGURATION
 - **TF02-Pro TX:** GPIO 13 (Serial2 RX pin)
 - **TF02-Pro RX:** GPIO 14 (Serial2 TX pin)
-- **VCC:** 5V (or 3.3V if sensor supports it)
+- **VCC:** 5V boost output (external)
 - **GND:** GND
 - **Note:** 
   - Extended range LiDAR sensor (22m) validated for larger rivers (Santana et al. 2024)

@@ -18,7 +18,7 @@ All code implementation tasks have been completed according to the plan. The sys
 - **File:** `lilygo-lora32/src/main.cpp`
 - **Status:** Complete
 - **Features:**
-  - UART interface (Serial2, GPIO 16/17)
+  - UART interface (Serial2, GPIO 13/14)
   - Temperature compensation algorithm (Mohammed et al. 2019, Tawalbeh et al. 2023)
   - Internal temperature sensor (TF02-Pro has built-in temperature sensor)
   - Frame rate optimization (10Hz for power saving)
@@ -41,7 +41,7 @@ All code implementation tasks have been completed according to the plan. The sys
   - Power consumption: ~10µA in sleep
 
 ### 4. Sensor Configuration ✅
-- **Node 1 (LilyGo):** TF02-Pro LiDAR (UART, 22m range, internal temperature sensor)
+- **Node 1 (LilyGo T-Beam AXP2101 v1.2):** TF02-Pro LiDAR (UART, 22m range, internal temperature sensor)
 - **Node 2 (Heltec):** JSN-SR04T Ultrasonic (GPIO, 25-450cm range, waterproof)
 - **DHT11 Temperature Sensor:** Integrated for ultrasonic compensation (Heltec node)
   - GPIO 27 (or GPIO 25, avoiding conflicts)
@@ -135,11 +135,11 @@ All code implementation tasks have been completed according to the plan. The sys
 
 ## Sensor Deployment Strategy
 
-### Node 1: LilyGo + TF02-Pro
+### Node 1: T-Beam AXP2101 v1.2 + TF02-Pro
 - **Rationale:** Extended range (22m) for larger rivers
 - **Interface:** UART (Serial2)
 - **Features:** Temperature compensation, signal monitoring
-- **Power:** Direct LiPo battery
+- **Power:** 18650 to T-Beam + separate 18650 to 5V boost
 
 ### Node 2: Heltec + JSN-SR04T
 - **Rationale:** Waterproof, cost-effective, validated in literature
@@ -150,9 +150,9 @@ All code implementation tasks have been completed according to the plan. The sys
 ## Next Steps for Field Deployment
 
 1. **Hardware Assembly:**
-   - Wire TF02-Pro to LilyGo (UART: GPIO 16/17)
+   - Wire TF02-Pro to T-Beam (UART: GPIO 13/14)
    - Wire JSN-SR04T to Heltec (GPIO 13/12)
-   - Connect batteries
+   - Connect batteries (T-Beam + 5V boost)
    - Attach antennas
 
 2. **Testing:**
@@ -208,7 +208,7 @@ pio device monitor --baud 115200
 ## Verification Checklist
 
 - [x] TF02-Pro sensor library exists and compiles
-- [x] UART interface configured (Serial2, GPIO 16/17)
+- [x] UART interface configured (Serial2, GPIO 13/14)
 - [x] Temperature compensation implemented
 - [x] Deep sleep implemented (both nodes)
 - [x] Battery monitoring implemented (both nodes)

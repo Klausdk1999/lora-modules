@@ -4,26 +4,26 @@ This guide explains how to test the real sensors with your LoRa boards.
 
 ## Testing Groups
 
-### 📡 Group A: LilyGo LoRa32 + TF-Luna LiDAR
+### 📡 Group A: LilyGo T-Beam AXP2101 v1.2 + TF02-Pro LiDAR
 
 **Best for:** High-accuracy measurements, clear water, indoor testing
 
 | Component | Details |
 |-----------|---------|
-| **Board** | LilyGo LoRa32 |
-| **Sensor** | TF-Luna LiDAR |
-| **Interface** | I2C |
-| **Range** | 20cm - 800cm |
-| **Power** | Direct battery from board's LiPo connector |
+| **Board** | LilyGo T-Beam AXP2101 v1.2 |
+| **Sensor** | TF02-Pro LiDAR |
+| **Interface** | UART |
+| **Range** | 0.1m - 22m (indoor) |
+| **Power** | T-Beam battery + external 5V boost |
 
 **Wiring:**
 ```
-TF-Luna     →    LilyGo
+TF02-Pro    →    T-Beam
 ─────────────────────────
-VCC         →    3.3V
+VCC         →    5V boost output
 GND         →    GND
-SDA         →    GPIO 21
-SCL         →    GPIO 22
+TX          →    GPIO 13 (Serial2 RX)
+RX          →    GPIO 14 (Serial2 TX)
 ```
 
 ---
@@ -56,11 +56,12 @@ ECHO        →    GPIO 12
 
 ### 1. Hardware Assembly
 
-#### For LilyGo + TF-Luna:
-1. Connect the TF-Luna sensor using 4 wires (VCC, GND, SDA, SCL)
-2. Use the recommended GPIO pins (21 for SDA, 22 for SCL)
-3. Connect your LiPo battery directly to the board's JST connector
-4. Attach the LoRa antenna
+#### For T-Beam + TF02-Pro:
+1. Connect the TF02-Pro sensor using 4 wires (VCC, GND, TX, RX)
+2. Use GPIO 13 (RX) and GPIO 14 (TX)
+3. Connect a 18650 battery to the T-Beam JST connector
+4. Use a separate 5V boost module for TF02-Pro power
+5. Attach the LoRa antenna
 
 #### For Heltec + Ultrasonic:
 1. Connect the ultrasonic sensor using 4 wires (VCC, GND, TRIG, ECHO)
@@ -84,7 +85,7 @@ In `heltec-lora32-v2/src/main.cpp`, uncomment the appropriate line:
 ### 3. Building and Uploading
 
 ```bash
-# For LilyGo with TF-Luna:
+# For T-Beam with TF02-Pro:
 cd LoRa-River-Monitoring/lilygo-lora32
 pio run --target upload
 
@@ -104,14 +105,14 @@ pio device monitor --baud 115200
 
 ## Expected Serial Output
 
-### LilyGo + TF-Luna:
+### T-Beam + TF02-Pro:
 ```
 =============================================
-LilyGo LoRa32 - TF-Luna LiDAR Sensor Node
+LilyGo T-Beam AXP2101 v1.2 - TF02-Pro LiDAR Sensor Node
 =============================================
 
-Initializing TF-Luna LiDAR sensor...
-✓ TF-Luna sensor initialized successfully
+Initializing TF02-Pro LiDAR sensor...
+✓ TF02-Pro sensor initialized successfully
   Test reading: 125.0 cm
 
 Setup complete. Joining LoRaWAN network...
@@ -160,7 +161,7 @@ Both nodes send the same 8-byte payload structure:
 
 | Byte | Field | Description |
 |------|-------|-------------|
-| 0 | sensorType | 1=TF-Luna, 2=HC-SR04, 3=JSN-SR04T, 0xFF=Error |
+| 0 | sensorType | 1=TF02-Pro, 2=HC-SR04, 3=JSN-SR04T, 0xFF=Error |
 | 1-2 | distanceMm | Distance in millimeters (uint16) |
 | 3-4 | signalStrength | Signal quality (LiDAR only) |
 | 5 | temperature | Temperature in °C |
@@ -180,8 +181,8 @@ function decodeUplink(input) {
   data.readingCount = input.bytes[7];
   
   var sensorNames = {
-    1: "TF-Luna",
-    2: "HC-SR04", 
+    1: "TF02-Pro",
+    2: "HC-SR04",
     3: "JSN-SR04T",
     255: "Error"
   };

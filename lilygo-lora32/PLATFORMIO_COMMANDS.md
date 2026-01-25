@@ -1,6 +1,6 @@
 # PlatformIO Terminal Commands
 
-This guide provides common PlatformIO commands for the LilyGo LoRa32 project.
+This guide provides common PlatformIO commands for the LilyGo T-Beam AXP2101 v1.2 project.
 
 ## Prerequisites
 
