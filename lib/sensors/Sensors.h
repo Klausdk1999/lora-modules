@@ -16,6 +16,7 @@
 // LiDAR sensors (Benewake)
 #include "TFLuna/TFLuna.h"
 #include "TF02Pro/TF02Pro.h"
+#include "TFNova/TFNova.h"
 
 // Ultrasonic sensors
 #include "HCSR04/HCSR04.h"

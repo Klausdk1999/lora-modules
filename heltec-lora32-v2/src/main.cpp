@@ -36,20 +36,28 @@
 #include <U8g2lib.h>
 
 // Include sensor libraries
-#include "sensors/HCSR04/HCSR04.h"
-#include "sensors/JSNSR04T/JSNSR04T.h"
-#include "DHTesp.h"  // DHT11/DHT22 temperature sensor library (beegee-tokyo/DHTesp)
+#include "HCSR04/HCSR04.h"
+#include "JSNSR04T/JSNSR04T.h"
+#include <DHT.h>  // Adafruit DHT sensor library
 
 // ============================================================================
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true    // Enable serial output for debugging
-#define TX_INTERVAL_SECONDS     900     // Send data every 15 minutes (900 seconds)
+#define TX_INTERVAL_SECONDS     120     // Send data every 2 minutes (reduced from 15 min for testing)
 #define NUM_READINGS_AVG        7       // Number of readings for median filtering (odd number recommended)
-#define READING_DELAY_MS        60      // Delay between readings (ms)
+#define READING_DELAY_MS        100     // Delay between readings (ms) - increased for sensor stability
 #define DEEP_SLEEP_ENABLED      true    // Enable deep sleep between transmissions
 #define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% deviation from median
 #define DEFAULT_TEMPERATURE     25.0f   // Default temperature (Celsius) if sensor unavailable
+
+// ============================================================================
+// Sensor Reliability Configuration
+// ============================================================================
+#define SENSOR_READ_RETRIES     3       // Number of retry attempts if all readings fail
+#define SENSOR_RETRY_DELAY_MS   300     // Delay between retry attempts (ms)
+#define SENSOR_ERROR_VALUE      -1      // Sentinel value indicating sensor error (vs actual 0)
+#define MIN_VALID_READINGS      2       // Minimum valid readings required for a successful measurement
 
 // ============================================================================
 // Sensor Selection - Uncomment ONE of the following
@@ -121,7 +129,7 @@ const uint8_t SENSOR_TYPE_ID = 3;  // JSN-SR04T
 // ============================================================================
 // Temperature Sensor Instance (DHT11 for ultrasonic compensation)
 // ============================================================================
-DHTesp dhtSensor;  // DHT11 temperature sensor for speed-of-sound compensation
+DHT dhtSensor(DHT_PIN, DHT11);  // DHT11 temperature sensor for speed-of-sound compensation
 bool temperatureSensorAvailable = false;
 
 // ============================================================================
@@ -210,19 +218,19 @@ void setup() {
     Serial.print(F("Initializing DHT11 temperature sensor on GPIO "));
     Serial.print(DHT_PIN);
     Serial.println(F("..."));
-    dhtSensor.setup(DHT_PIN, DHTesp::DHT11);  // DHT11 (or DHT22 if available)
+    dhtSensor.begin();
     delay(2000);  // DHT sensors need 2 seconds to stabilize
-    TempAndHumidity tempHumid = dhtSensor.getTempAndHumidity();
-    if (dhtSensor.getStatus() == 0 && !isnan(tempHumid.temperature)) {
+    float testTemp = dhtSensor.readTemperature();
+    if (!isnan(testTemp)) {
         temperatureSensorAvailable = true;
-        Serial.print(F("✓ DHT11 temperature sensor initialized: "));
-        Serial.print(tempHumid.temperature);
-        Serial.println(F(" °C"));
+        Serial.print(F("DHT11 temperature sensor initialized: "));
+        Serial.print(testTemp);
+        Serial.println(F(" C"));
     } else {
         temperatureSensorAvailable = false;
-        Serial.println(F("✗ DHT11 temperature sensor NOT detected or unavailable"));
+        Serial.println(F("DHT11 temperature sensor NOT detected or unavailable"));
         Serial.println(F("  Check wiring: VCC->3.3V/5V, GND->GND, DATA->GPIO 27"));
-        Serial.println(F("  Using default temperature (25°C) - readings will have reduced accuracy"));
+        Serial.println(F("  Using default temperature (25C) - readings will have reduced accuracy"));
     }
     
     // Initialize ultrasonic sensor
@@ -318,98 +326,228 @@ void loop() {
 }
 
 // ============================================================================
+// Sensor Reading Error Codes (for diagnostics)
+// ============================================================================
+enum SensorErrorCode {
+    ERR_NONE = 0,
+    ERR_NOT_INITIALIZED = 1,
+    ERR_NO_VALID_READINGS = 2,
+    ERR_ALL_READINGS_ZERO = 3,
+    ERR_TIMEOUT = 4,
+    ERR_INSUFFICIENT_VALID = 5,
+    ERR_TEMP_SENSOR_FAIL = 6
+};
+
+// Store last error for diagnostics
+SensorErrorCode lastSensorError = ERR_NONE;
+uint8_t consecutiveFailures = 0;
+
+// ============================================================================
 // Read Sensor Data with Statistical Filtering (Kabi et al. 2023)
 // Temperature Compensation (Mohammed et al. 2019, Tawalbeh et al. 2023)
+// Includes retry logic for improved reliability
 // ============================================================================
 bool readSensorData() {
-    Serial.println(F("\nReading ultrasonic sensor..."));
-    
+    Serial.println(F("\n========================================"));
+    Serial.println(F("Reading ultrasonic sensor ("));
+    Serial.print(SENSOR_NAME);
+    Serial.println(F(")"));
+    Serial.println(F("========================================"));
+
     // Update temperature for compensation (Mohammed et al. 2019, Tawalbeh et al. 2023)
-    // Tawalbeh et al. (2023) demonstrated that diurnal temperature swings of 20°C can introduce
-    // measurement errors of several centimeters without compensation
     float ambientTemp = getAmbientTemperature();
     ultrasonicSensor.setTemperature(ambientTemp);
-    
-    // Take multiple readings for statistical filtering
-    // Based on Kabi et al. (2023): raw sensor data in river environments is prone 
-    // to noise from turbulence and debris, necessitating filtering
-    float readings[NUM_READINGS_AVG];
-    uint8_t validReadings = 0;
-    
-    // Collect all valid readings
-    for (int i = 0; i < NUM_READINGS_AVG; i++) {
-        float dist = ultrasonicSensor.readDistanceCm();
-        
-        if (dist > 0 && dist <= ultrasonicSensor.getMaxDistance()) {
-            readings[validReadings] = dist;
-            validReadings++;
-            Serial.print(F("  Reading "));
-            Serial.print(i + 1);
-            Serial.print(F(": "));
-            Serial.print(dist);
-            Serial.println(F(" cm"));
-        } else {
-            Serial.print(F("  Reading "));
-            Serial.print(i + 1);
-            Serial.println(F(": INVALID"));
-        }
-        
-        delay(READING_DELAY_MS);
-    }
-    
-    if (validReadings == 0) {
-        Serial.println(F("No valid sensor readings!"));
-        currentStatus = STATUS_SENSOR_ERROR;
-        return false;
-    }
-    
-    // Calculate median (more robust than mean for noisy data)
-    float median = calculateMedian(readings, validReadings);
-    Serial.print(F("\n  Median: "));
-    Serial.print(median);
-    Serial.println(F(" cm"));
-    
-    // Filter outliers based on deviation from median (Kabi et al. filtering approach)
-    float filteredReadings[NUM_READINGS_AVG];
-    uint8_t filteredCount = validReadings;
-    float avgDistance = filterOutliers(readings, filteredCount, median, OUTLIER_THRESHOLD_PCT);
-    
-    // Use median if filtering removed too many samples (fallback)
-    if (filteredCount < validReadings / 2) {
-        Serial.println(F("  Warning: Too many outliers, using median instead"));
-        avgDistance = median;
-        filteredCount = validReadings;
+
+    Serial.print(F("Ambient temperature: "));
+    Serial.print(ambientTemp);
+    if (!temperatureSensorAvailable) {
+        Serial.println(F(" C (DEFAULT - no sensor)"));
     } else {
-        Serial.print(F("  Outliers removed: "));
-        Serial.print(validReadings - filteredCount);
+        Serial.println(F(" C (DHT11)"));
+    }
+
+    // Retry loop for entire reading process
+    for (uint8_t attempt = 0; attempt < SENSOR_READ_RETRIES; attempt++) {
+        if (attempt > 0) {
+            Serial.print(F("\n>>> RETRY ATTEMPT "));
+            Serial.print(attempt + 1);
+            Serial.print(F("/"));
+            Serial.println(SENSOR_READ_RETRIES);
+            Serial.println(F("Waiting before retry..."));
+            delay(SENSOR_RETRY_DELAY_MS);
+        }
+
+        // Take multiple readings for statistical filtering
+        float readings[NUM_READINGS_AVG];
+        uint8_t validReadings = 0;
+        uint8_t zeroReadings = 0;
+        uint8_t timeoutReadings = 0;
+        uint8_t outOfRangeReadings = 0;
+
+        Serial.print(F("Taking "));
+        Serial.print(NUM_READINGS_AVG);
+        Serial.println(F(" readings..."));
+
+        // Collect all readings
+        for (int i = 0; i < NUM_READINGS_AVG; i++) {
+            float dist = ultrasonicSensor.readDistanceCm();
+
+            Serial.print(F("  ["));
+            Serial.print(i + 1);
+            Serial.print(F("] "));
+
+            if (dist < 0) {
+                // Timeout - no echo received
+                Serial.println(F("TIMEOUT (no echo)"));
+                timeoutReadings++;
+            } else if (dist == 0) {
+                // Zero reading - could be too close or sensor error
+                Serial.println(F("ZERO (object too close or error)"));
+                zeroReadings++;
+            } else if (dist < ultrasonicSensor.getMinDistance()) {
+                // Below minimum range (blind zone)
+                Serial.print(dist);
+                Serial.print(F(" cm - BELOW MIN ("));
+                Serial.print(ultrasonicSensor.getMinDistance());
+                Serial.println(F(" cm)"));
+                outOfRangeReadings++;
+            } else if (dist > ultrasonicSensor.getMaxDistance()) {
+                // Above maximum range
+                Serial.print(dist);
+                Serial.print(F(" cm - ABOVE MAX ("));
+                Serial.print(ultrasonicSensor.getMaxDistance());
+                Serial.println(F(" cm)"));
+                outOfRangeReadings++;
+            } else {
+                // Valid reading
+                readings[validReadings] = dist;
+                validReadings++;
+                Serial.print(dist);
+                Serial.println(F(" cm"));
+            }
+
+            delay(READING_DELAY_MS);
+        }
+
+        // Log reading statistics
+        Serial.println(F("\n--- Reading Statistics ---"));
+        Serial.print(F("Valid: "));
+        Serial.print(validReadings);
+        Serial.print(F(", Timeout: "));
+        Serial.print(timeoutReadings);
+        Serial.print(F(", Zero: "));
+        Serial.print(zeroReadings);
+        Serial.print(F(", OutOfRange: "));
+        Serial.println(outOfRangeReadings);
+
+        // Check if we have enough valid readings
+        if (validReadings < MIN_VALID_READINGS) {
+            Serial.print(F("ERROR: Insufficient valid readings (need >= "));
+            Serial.print(MIN_VALID_READINGS);
+            Serial.println(F(")"));
+
+            // Diagnose the problem
+            if (timeoutReadings == NUM_READINGS_AVG) {
+                lastSensorError = ERR_TIMEOUT;
+                Serial.println(F("Diagnosis: All readings timed out"));
+                Serial.println(F("  - Check sensor wiring (TRIG/ECHO)"));
+                Serial.println(F("  - Check sensor power (5V)"));
+                Serial.println(F("  - Target may be too far (> max range)"));
+            } else if (zeroReadings > 0) {
+                lastSensorError = ERR_ALL_READINGS_ZERO;
+                Serial.println(F("Diagnosis: Zero readings detected"));
+                Serial.println(F("  - Object may be in blind zone (< min range)"));
+                Serial.println(F("  - Check for obstructions near sensor"));
+            } else {
+                lastSensorError = ERR_INSUFFICIENT_VALID;
+            }
+
+            // Continue to next retry attempt
+            continue;
+        }
+
+        // We have enough valid readings - process them
+        Serial.println(F("\nProcessing valid readings..."));
+
+        // Calculate median (more robust than mean for noisy data)
+        float median = calculateMedian(readings, validReadings);
+        Serial.print(F("  Median: "));
+        Serial.print(median);
+        Serial.println(F(" cm"));
+
+        // Filter outliers based on deviation from median (Kabi et al. filtering approach)
+        uint8_t filteredCount = validReadings;
+        float avgDistance = filterOutliers(readings, filteredCount, median, OUTLIER_THRESHOLD_PCT);
+
+        // Use median if filtering removed too many samples (fallback)
+        if (filteredCount < validReadings / 2) {
+            Serial.println(F("  Warning: Too many outliers, using median instead"));
+            avgDistance = median;
+            filteredCount = validReadings;
+        } else {
+            Serial.print(F("  Outliers removed: "));
+            Serial.print(validReadings - filteredCount);
+            Serial.print(F("/"));
+            Serial.println(validReadings);
+        }
+
+        lastDistance = avgDistance;
+
+        // Fill payload structure
+        sensorData.sensorType = SENSOR_TYPE_ID;
+        sensorData.distanceMm = (uint16_t)(avgDistance * 10);  // Convert cm to mm
+        sensorData.signalStrength = 0;  // Not available for ultrasonic
+        sensorData.temperature = (int8_t)round(ambientTemp);
+        sensorData.batteryPercent = getBatteryPercent();
+        sensorData.readingCount = filteredCount;
+
+        Serial.println(F("\n========================================"));
+        Serial.println(F("       SENSOR READING SUCCESS"));
+        Serial.println(F("========================================"));
+        Serial.print(F("Filtered Distance: "));
+        Serial.print(avgDistance);
+        Serial.println(F(" cm"));
+        Serial.print(F("Temperature: "));
+        Serial.print(ambientTemp);
+        Serial.println(F(" C"));
+        Serial.print(F("Battery: "));
+        Serial.print(sensorData.batteryPercent);
+        Serial.println(F("%"));
+        Serial.print(F("Valid readings: "));
+        Serial.print(filteredCount);
         Serial.print(F("/"));
         Serial.println(validReadings);
+        if (attempt > 0) {
+            Serial.print(F("Success after "));
+            Serial.print(attempt + 1);
+            Serial.println(F(" attempts"));
+        }
+        Serial.println(F("========================================"));
+
+        // Reset error tracking on success
+        lastSensorError = ERR_NONE;
+        consecutiveFailures = 0;
+        currentStatus = STATUS_CONNECTED;
+
+        return true;
     }
-    
-    lastDistance = avgDistance;
-    
-    // Fill payload structure
-    sensorData.sensorType = SENSOR_TYPE_ID;
-    sensorData.distanceMm = (uint16_t)(avgDistance * 10);  // Convert cm to mm
-    sensorData.signalStrength = 0;  // Not available for ultrasonic
-    sensorData.temperature = (int8_t)round(ambientTemp);
-    sensorData.batteryPercent = getBatteryPercent();
-    sensorData.readingCount = filteredCount;
-    
-    Serial.println(F("\n--- Sensor Reading Summary ---"));
-    Serial.print(F("Filtered Distance: "));
-    Serial.print(avgDistance);
-    Serial.println(F(" cm"));
-    Serial.print(F("Temperature: "));
-    Serial.print(ambientTemp);
-    Serial.println(F(" °C"));
-    Serial.print(F("Valid readings: "));
-    Serial.print(filteredCount);
-    Serial.print(F("/"));
-    Serial.println(validReadings);
-    Serial.println(F("------------------------------"));
-    
-    return true;
+
+    // All retry attempts failed
+    Serial.println(F("\n========================================"));
+    Serial.println(F("    SENSOR READING FAILED"));
+    Serial.println(F("========================================"));
+    Serial.print(F("All "));
+    Serial.print(SENSOR_READ_RETRIES);
+    Serial.println(F(" attempts failed!"));
+    Serial.print(F("Last error code: "));
+    Serial.println(lastSensorError);
+    consecutiveFailures++;
+    Serial.print(F("Consecutive failures: "));
+    Serial.println(consecutiveFailures);
+    Serial.println(F("========================================"));
+
+    currentStatus = STATUS_SENSOR_ERROR;
+    return false;
 }
 
 // ============================================================================
@@ -492,28 +630,58 @@ void do_send(osjob_t* j) {
     // Read sensor data
     if (readSensorData()) {
         packetCount++;
-        
+
         Serial.print(F(">>> Sending packet #"));
         Serial.print(packetCount);
         Serial.print(F(": "));
         Serial.print(sensorData.distanceMm / 10.0f);
         Serial.println(F(" cm"));
-        
+
         // Send the payload
         uint8_t result = LMIC_setTxData2(1, (uint8_t*)&sensorData, sizeof(sensorData), 0);
-        
+
         if (result) {
             Serial.println(F("ERROR: Failed to queue packet!"));
         } else {
             Serial.println(F("Packet queued for transmission"));
         }
     } else {
-        // Send error indicator if sensor failed
-        Serial.println(F("Sensor read failed, sending error packet"));
+        // Send error indicator if sensor failed, but always include available diagnostic info
+        Serial.println(F("\n>>> SENDING ERROR PACKET <<<"));
+        Serial.println(F("Sensor read failed after all retries"));
+
+        // Get temperature even on error (for diagnostics)
+        float ambientTemp = getAmbientTemperature();
+
+        // Use SENSOR_ERROR_VALUE (-1) converted to unsigned for distanceMm to indicate error
+        // This is 0xFFFF (65535) which is clearly invalid for a distance measurement
         sensorData.sensorType = 0xFF;  // Error indicator
-        sensorData.distanceMm = 0;
-        sensorData.readingCount = 0;
-        LMIC_setTxData2(1, (uint8_t*)&sensorData, sizeof(sensorData), 0);
+        sensorData.distanceMm = 0xFFFF;  // -1 as unsigned = error sentinel
+        sensorData.signalStrength = (int16_t)lastSensorError;  // Store error code
+        sensorData.temperature = (int8_t)round(ambientTemp);  // Temperature still useful
+        sensorData.batteryPercent = getBatteryPercent();
+        sensorData.readingCount = consecutiveFailures;  // Store consecutive failure count
+
+        Serial.println(F("Error payload contents:"));
+        Serial.print(F("  sensorType: 0xFF (error)"));
+        Serial.print(F("  distanceMm: 0xFFFF (error sentinel)"));
+        Serial.print(F("  errorCode: "));
+        Serial.println(lastSensorError);
+        Serial.print(F("  consecutiveFailures: "));
+        Serial.println(consecutiveFailures);
+        Serial.print(F("  temperature: "));
+        Serial.print(ambientTemp);
+        Serial.println(F(" C"));
+        Serial.print(F("  battery: "));
+        Serial.print(sensorData.batteryPercent);
+        Serial.println(F("%"));
+
+        uint8_t result = LMIC_setTxData2(1, (uint8_t*)&sensorData, sizeof(sensorData), 0);
+        if (result) {
+            Serial.println(F("ERROR: Failed to queue error packet!"));
+        } else {
+            Serial.println(F("Error packet queued for transmission"));
+        }
     }
 }
 
@@ -696,20 +864,18 @@ void updateDisplay() {
 // ============================================================================
 float getAmbientTemperature() {
     if (temperatureSensorAvailable) {
-        // Read temperature from DHT11 sensor
-        // DHTesp library requires getTempAndHumidity() call (already initialized in setup)
-        TempAndHumidity tempHumid = dhtSensor.getTempAndHumidity();
-        
+        // Read temperature from DHT11 sensor using Adafruit library
+        float temp = dhtSensor.readTemperature();
+
         // Check if reading is valid
-        if (dhtSensor.getStatus() == 0 && !isnan(tempHumid.temperature)) {
-            float temp = tempHumid.temperature;
-            // Validate temperature range (reasonable for outdoor deployment: -10°C to 50°C)
+        if (!isnan(temp)) {
+            // Validate temperature range (reasonable for outdoor deployment: -10C to 50C)
             if (temp >= -10.0f && temp <= 50.0f) {
                 return temp;
             } else {
                 Serial.print(F("Warning: DHT11 reading out of range: "));
                 Serial.print(temp);
-                Serial.println(F(" °C, using default"));
+                Serial.println(F(" C, using default"));
                 return DEFAULT_TEMPERATURE;
             }
         } else {
@@ -719,7 +885,6 @@ float getAmbientTemperature() {
         }
     } else {
         // DHT11 sensor not available or not initialized, use default
-        // This should not happen in normal operation after setup, but provides fallback
         return DEFAULT_TEMPERATURE;
     }
 }
