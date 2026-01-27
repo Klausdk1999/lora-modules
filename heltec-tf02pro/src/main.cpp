@@ -127,6 +127,34 @@ int8_t lastSNR = 0;
 bool joinedNetwork = false;
 bool transmissionCompleted = false;
 
+// ============================================================================
+// Session Persistence (RTC Memory - survives deep sleep)
+// ============================================================================
+// Magic number to verify RTC data is valid
+#define RTC_DATA_MAGIC 0xCAFE1234
+
+// Structure to save LMIC session state
+struct __attribute__((packed)) LMICSessionData {
+    uint32_t magic;             // Magic number to verify data
+    u4_t netid;                 // Network ID
+    devaddr_t devaddr;          // Device address
+    u1_t nwkKey[16];            // Network session key
+    u1_t artKey[16];            // Application session key
+    u4_t seqnoUp;               // Uplink frame counter
+    u4_t seqnoDn;               // Downlink frame counter
+    u1_t dn2Dr;                 // RX2 data rate
+    s1_t adrTxPow;              // ADR TX power
+    u4_t rxDelay;               // RX1 delay
+};
+
+// Store in RTC memory (survives deep sleep, lost on power cycle)
+RTC_DATA_ATTR LMICSessionData rtcSession;
+RTC_DATA_ATTR uint32_t rtcPacketCount = 0;
+RTC_DATA_ATTR uint8_t rtcTxFailCount = 0;  // Track consecutive TX failures
+
+// Max failures before forcing rejoin (handles gateway reset, session expiry)
+#define MAX_TX_FAILURES 3
+
 // Display status
 enum Status {
     STATUS_INIT,
@@ -167,6 +195,9 @@ void enterDeepSleep(uint32_t sleepSeconds);
 float calculateMedian(float readings[], uint8_t count);
 int16_t readLidarAverage(int16_t& strength, int16_t& sensorTemp);
 bool readDHTSensor(float& temperature, float& humidity);
+void saveSession();
+bool restoreSession();
+void clearSession();
 
 // ============================================================================
 // Setup
@@ -262,13 +293,42 @@ void setup() {
     LMIC_setAdrMode(0);
     LMIC_setLinkCheckMode(0);
 
-    currentStatus = STATUS_JOINING;
-    updateDisplay();
+    // Try to restore session from RTC memory (after deep sleep)
+    bool sessionRestored = (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER && restoreSession());
 
-    // Start join process
-    do_send(&sendjob);
+    // Check if we've had too many TX failures - force rejoin
+    if (sessionRestored && rtcTxFailCount >= MAX_TX_FAILURES) {
+        Serial.println(F("\nToo many TX failures - forcing rejoin"));
+        clearSession();
+        sessionRestored = false;
+    }
 
-    Serial.println(F("\nSetup complete. Joining LoRaWAN network..."));
+    if (sessionRestored) {
+        Serial.println(F("\nSession restored from RTC memory!"));
+        Serial.print(F("  DevAddr: "));
+        Serial.println(LMIC.devaddr, HEX);
+        Serial.print(F("  Frame counter: "));
+        Serial.println(LMIC.seqnoUp);
+        Serial.print(F("  TX fail count: "));
+        Serial.println(rtcTxFailCount);
+
+        joinedNetwork = true;
+        currentStatus = STATUS_CONNECTED;
+        packetCount = rtcPacketCount;
+        updateDisplay();
+
+        // Schedule immediate transmission (no join needed)
+        Serial.println(F("Scheduling transmission in 1 second..."));
+        os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(1), do_send);
+    } else {
+        // Cold boot or no valid session - need to join
+        currentStatus = STATUS_JOINING;
+        updateDisplay();
+
+        // Start join process
+        do_send(&sendjob);
+        Serial.println(F("\nSetup complete. Joining LoRaWAN network..."));
+    }
 }
 
 // ============================================================================
@@ -552,6 +612,10 @@ void enterDeepSleep(uint32_t sleepSeconds) {
     Serial.print(F("Entering deep sleep for "));
     Serial.print(sleepSeconds);
     Serial.println(F(" seconds..."));
+
+    // Save LoRa session to RTC memory before sleep
+    saveSession();
+
     Serial.flush();
 
     // Turn off OLED display
@@ -559,6 +623,78 @@ void enterDeepSleep(uint32_t sleepSeconds) {
 
     esp_sleep_enable_timer_wakeup(sleepSeconds * 1000000ULL);
     esp_deep_sleep_start();
+}
+
+// ============================================================================
+// Save LMIC Session to RTC Memory
+// ============================================================================
+void saveSession() {
+    if (LMIC.devaddr == 0) {
+        Serial.println(F("  No session to save (not joined)"));
+        return;
+    }
+
+    rtcSession.magic = RTC_DATA_MAGIC;
+    rtcSession.netid = LMIC.netid;
+    rtcSession.devaddr = LMIC.devaddr;
+    memcpy(rtcSession.nwkKey, LMIC.nwkKey, 16);
+    memcpy(rtcSession.artKey, LMIC.artKey, 16);
+    rtcSession.seqnoUp = LMIC.seqnoUp;
+    rtcSession.seqnoDn = LMIC.seqnoDn;
+    rtcSession.dn2Dr = LMIC.dn2Dr;
+    rtcSession.adrTxPow = LMIC.adrTxPow;
+    rtcSession.rxDelay = LMIC.rxDelay;
+
+    rtcPacketCount = packetCount;
+
+    Serial.println(F("  Session saved to RTC memory"));
+    Serial.print(F("    DevAddr: "));
+    Serial.println(rtcSession.devaddr, HEX);
+    Serial.print(F("    SeqnoUp: "));
+    Serial.println(rtcSession.seqnoUp);
+}
+
+// ============================================================================
+// Restore LMIC Session from RTC Memory
+// ============================================================================
+bool restoreSession() {
+    // Check if we have valid saved session
+    if (rtcSession.magic != RTC_DATA_MAGIC) {
+        Serial.println(F("No valid session in RTC memory"));
+        return false;
+    }
+
+    if (rtcSession.devaddr == 0) {
+        Serial.println(F("Invalid DevAddr in saved session"));
+        return false;
+    }
+
+    // Restore session to LMIC
+    LMIC.netid = rtcSession.netid;
+    LMIC.devaddr = rtcSession.devaddr;
+    memcpy(LMIC.nwkKey, rtcSession.nwkKey, 16);
+    memcpy(LMIC.artKey, rtcSession.artKey, 16);
+    LMIC.seqnoUp = rtcSession.seqnoUp;
+    LMIC.seqnoDn = rtcSession.seqnoDn;
+    LMIC.dn2Dr = rtcSession.dn2Dr;
+    LMIC.adrTxPow = rtcSession.adrTxPow;
+    LMIC.rxDelay = rtcSession.rxDelay;
+
+    // Mark as joined
+    LMIC.opmode &= ~OP_JOINING;
+
+    return true;
+}
+
+// ============================================================================
+// Clear Session (force rejoin on next boot)
+// ============================================================================
+void clearSession() {
+    Serial.println(F("Clearing saved session - will rejoin on next boot"));
+    rtcSession.magic = 0;  // Invalidate saved session
+    rtcSession.devaddr = 0;
+    rtcTxFailCount = 0;
+    joinedNetwork = false;
 }
 
 // ============================================================================
@@ -727,6 +863,9 @@ void onEvent(ev_t ev) {
             Serial.println(F("EV_TXCOMPLETE"));
             transmissionCompleted = true;
 
+            // TX succeeded - reset failure counter
+            rtcTxFailCount = 0;
+
             if (LMIC.txrxFlags & TXRX_ACK) {
                 Serial.println(F(">>> Received ACK"));
             }
@@ -758,6 +897,20 @@ void onEvent(ev_t ev) {
 
         case EV_LINK_DEAD:
             Serial.println(F("EV_LINK_DEAD"));
+            rtcTxFailCount++;
+            Serial.print(F("TX failures: "));
+            Serial.print(rtcTxFailCount);
+            Serial.print(F("/"));
+            Serial.println(MAX_TX_FAILURES);
+
+            if (rtcTxFailCount >= MAX_TX_FAILURES) {
+                Serial.println(F("Too many failures - forcing rejoin"));
+                clearSession();
+                LMIC_reset();
+                LMIC_selectSubBand(1);
+                LMIC_setDrTxpow(DR_SF7, 14);
+                LMIC_startJoining();
+            }
             currentStatus = STATUS_JOINING;
             joinedNetwork = false;
             updateDisplay();

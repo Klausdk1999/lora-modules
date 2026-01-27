@@ -11,7 +11,9 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(pio run:*)"
+      "Bash(pio run:*)",
+      "Bash(dir \"C:\\\\Users\\\\Klaus\\\\Documents\\\\Mestrado CA\\\\lora-modules\")",
+      "Bash(go build:*)"
     ]
   }
 }

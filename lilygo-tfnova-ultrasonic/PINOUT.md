@@ -6,6 +6,27 @@ This node uses a LilyGo T-Beam V1.2 (AXP2101) with:
 - AJ-SR04M Ultrasonic sensor (GPIO)
 - DHT11 Temperature/Humidity sensor
 
+## T-Beam V1.2 Available External Pins
+
+```
+Header Side 1:           Header Side 2:
+  VP (GPIO 36)             TX (GPIO 1)
+  VN (GPIO 39)             RX (GPIO 3)
+  RST                      23
+  15                       4
+  35                       0
+  32                       GND
+  33                       3V3
+  25                       GND
+  14                       22
+  13                       21
+  2                        3.3V
+  GND                      LORA2 (internal)
+  5V                       LORA1 (internal)
+```
+
+**Note**: GPIO 36 (VP), 39 (VN), and 35 are input-only pins.
+
 ## Power Supply
 - **5V External Battery** powers the TF-Nova and AJ-SR04M sensors
 - Both sensors require 5V (they will not work reliably on 3.3V)
@@ -27,7 +48,7 @@ This node uses a LilyGo T-Beam V1.2 (AXP2101) with:
                     | GPIO 14 (TX) |----+---- TF-Nova RX (white)
                     |                   |
                     | GPIO 25 (TRIG)|---+---- AJ-SR04M TRIG
-                    | GPIO 12 (ECHO)|---+---- AJ-SR04M ECHO
+                    | GPIO 35 (ECHO)|---+---- AJ-SR04M ECHO (input-only)
                     |                   |
                     | GPIO 15 (DATA)|---+---- DHT11 DATA
                     |                   |
@@ -41,7 +62,7 @@ This node uses a LilyGo T-Beam V1.2 (AXP2101) with:
     | VCC (red)   |---5V       | VCC              |---5V   | VCC     |---3.3V/5V
     | GND (black) |---GND      | GND              |---GND  | GND     |---GND
     | TX (green)  |---GPIO 13  | TRIG             |---GPIO 25
-    | RX (white)  |---GPIO 14  | ECHO             |---GPIO 12| DATA    |---GPIO 15
+    | RX (white)  |---GPIO 14  | ECHO             |---GPIO 35| DATA    |---GPIO 15
     +-------------+            +------------------+        +---------+
 ```
 
@@ -63,7 +84,7 @@ This node uses a LilyGo T-Beam V1.2 (AXP2101) with:
 | TX                | 14   | Output    | TF-Nova RX          | Sends commands                 |
 | **AJ-SR04M**      |      |           |                     | GPIO trigger/echo              |
 | TRIG              | 25   | Output    | AJ-SR04M TRIG       | Trigger pulse                  |
-| ECHO              | 12   | Input     | AJ-SR04M ECHO       | Echo return                    |
+| ECHO              | 35   | Input     | AJ-SR04M ECHO       | Echo return (input-only pin)   |
 | **DHT11**         |      |           |                     | Single-wire protocol           |
 | DATA              | 15   | Bidirect  | DHT11 DATA          | Temperature/humidity           |
 
@@ -112,7 +133,7 @@ This node uses a LilyGo T-Beam V1.2 (AXP2101) with:
 1. Ensure target is within range (20-800cm)
 2. Check for obstructions in the acoustic path
 3. Verify 5V power (3.3V will not work reliably)
-4. Check TRIG/ECHO pin connections
+4. Check TRIG (GPIO 25) / ECHO (GPIO 35) pin connections
 
 ### DHT11 NaN readings
 1. Wait 2 seconds after power-on before reading
