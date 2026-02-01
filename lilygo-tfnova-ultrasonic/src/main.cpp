@@ -9,7 +9,7 @@
  * Configuration:
  * - Frequency: AU915 (Australia/Brazil)
  * - Power: 5V external battery
- * - Transmission interval: 30 seconds (testing mode)
+ * - Transmission interval: 10 seconds (rapid testing mode)
  *
  * Wiring (T-Beam V1.2):
  *   TF-Nova (UART via Serial2):
@@ -53,7 +53,7 @@
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true
-#define TX_INTERVAL_SECONDS     30      // 30 seconds between transmissions
+#define TX_INTERVAL_SECONDS     10      // 10 seconds between transmissions (rapid testing mode)
 #define NUM_READINGS_AVG        5       // Number of readings to average
 #define READING_DELAY_MS        100     // Delay between readings
 #define DEEP_SLEEP_ENABLED      true

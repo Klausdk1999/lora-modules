@@ -8,7 +8,7 @@
  * Configuration:
  * - Frequency: AU915 (Australia/Brazil)
  * - Power: 5V external battery
- * - Transmission interval: 30 seconds (testing mode)
+ * - Transmission interval: 10 seconds (rapid testing mode)
  * - Display: OLED shows status, distance, and signal quality
  *
  * Wiring (Heltec WiFi LoRa 32 V2):
@@ -42,7 +42,7 @@
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true
-#define TX_INTERVAL_SECONDS     30      // 30 seconds between transmissions
+#define TX_INTERVAL_SECONDS     10      // 10 seconds between transmissions (rapid testing mode)
 #define NUM_READINGS_AVG        5       // Number of readings to average
 #define READING_DELAY_MS        150     // Delay between readings (TF02-Pro at 10Hz = 100ms min)
 #define DEEP_SLEEP_ENABLED      true
