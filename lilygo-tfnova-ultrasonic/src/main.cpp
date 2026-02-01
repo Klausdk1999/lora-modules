@@ -371,7 +371,7 @@ void loop() {
 }
 
 // ============================================================================
-// Read TF-Nova with Averaging (returns -1 on error)
+// Read TF-Nova - Single Reading (returns -1 on error)
 // ============================================================================
 int16_t readTFNovaAverage() {
     if (!tfNovaInitialized) {
@@ -389,6 +389,24 @@ int16_t readTFNovaAverage() {
         }
     }
 
+    // Single reading mode for testing
+    Serial.println(F("Reading TF-Nova (single reading)..."));
+
+    SensorReading reading = tfNova.read();
+
+    if (reading.valid && reading.distance_cm > 0) {
+        Serial.print(F("  Distance: "));
+        Serial.print(reading.distance_cm);
+        Serial.print(F(" cm, sig: "));
+        Serial.println(reading.signal_strength);
+
+        return (int16_t)(reading.distance_cm * 10);  // Return in mm
+    } else {
+        Serial.println(F("  ERROR: Invalid reading"));
+        return SENSOR_ERROR_VALUE;
+    }
+
+    /* AVERAGING CODE - Uncomment to restore averaging
     float readings[NUM_READINGS_AVG];
     uint8_t validCount = 0;
 
@@ -425,12 +443,37 @@ int16_t readTFNovaAverage() {
     Serial.println(F(" cm"));
 
     return (int16_t)(median * 10);  // Return in mm
+    */
 }
 
 // ============================================================================
-// Read Ultrasonic with Averaging (returns -1 on error)
+// Read Ultrasonic - Single Reading (returns -1 on error)
 // ============================================================================
 int16_t readUltrasonicAverage() {
+    // Single reading mode for testing
+    Serial.println(F("Reading AJ-SR04M Ultrasonic (single reading)..."));
+
+    float dist = ultrasonicSensor.readDistanceCm();
+
+    if (dist > 0 && dist >= ultrasonicSensor.getMinDistance() && dist <= ultrasonicSensor.getMaxDistance()) {
+        Serial.print(F("  Distance: "));
+        Serial.print(dist);
+        Serial.println(F(" cm"));
+
+        return (int16_t)(dist * 10);  // Return in mm
+    } else if (dist < 0) {
+        Serial.println(F("  ERROR: TIMEOUT"));
+    } else if (dist == 0) {
+        Serial.println(F("  ERROR: ZERO (too close?)"));
+    } else {
+        Serial.print(F("  ERROR: "));
+        Serial.print(dist);
+        Serial.println(F(" cm (out of range)"));
+    }
+
+    return SENSOR_ERROR_VALUE;
+
+    /* AVERAGING CODE - Uncomment to restore averaging
     float readings[NUM_READINGS_AVG];
     uint8_t validCount = 0;
 
@@ -471,6 +514,7 @@ int16_t readUltrasonicAverage() {
     Serial.println(F(" cm"));
 
     return (int16_t)(median * 10);  // Return in mm
+    */
 }
 
 // ============================================================================

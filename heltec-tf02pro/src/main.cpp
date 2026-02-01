@@ -361,7 +361,7 @@ void loop() {
 }
 
 // ============================================================================
-// Read LiDAR with Averaging (returns -1 on error)
+// Read LiDAR - Single Reading (returns -1 on error)
 // ============================================================================
 int16_t readLidarAverage(int16_t& avgStrength, int16_t& avgSensorTemp) {
     if (!lidarInitialized) {
@@ -379,6 +379,31 @@ int16_t readLidarAverage(int16_t& avgStrength, int16_t& avgSensorTemp) {
         }
     }
 
+    // Single reading mode for testing
+    Serial.println(F("Reading TF02-Pro (single reading)..."));
+
+    SensorReading reading = lidarSensor.read();
+
+    if (reading.valid && reading.distance_cm > 0) {
+        avgStrength = reading.signal_strength;
+        avgSensorTemp = reading.temperature;
+
+        Serial.print(F("  Distance: "));
+        Serial.print(reading.distance_cm);
+        Serial.print(F(" cm, sig: "));
+        Serial.print(reading.signal_strength);
+        Serial.print(F(", temp: "));
+        Serial.print(reading.temperature);
+        Serial.println(F(" C"));
+
+        lastDistance = reading.distance_cm;
+        return (int16_t)(reading.distance_cm * 10);  // Return in mm
+    } else {
+        Serial.println(F("  ERROR: Invalid reading"));
+        return SENSOR_ERROR_VALUE;
+    }
+
+    /* AVERAGING CODE - Uncomment to restore averaging
     float distances[NUM_READINGS_AVG];
     int16_t strengths[NUM_READINGS_AVG];
     int16_t temps[NUM_READINGS_AVG];
@@ -441,6 +466,7 @@ int16_t readLidarAverage(int16_t& avgStrength, int16_t& avgSensorTemp) {
 
     lastDistance = median;
     return (int16_t)(median * 10);  // Return in mm
+    */
 }
 
 // ============================================================================

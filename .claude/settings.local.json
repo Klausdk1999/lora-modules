@@ -18,7 +18,11 @@
       "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd ESP8266 TF-Luna distance sensor test module\n\n- NodeMCU ESP8266 with TF-Luna LiDAR sensor \\(I2C mode\\)\n- Takes 5 normalized readings every 20 seconds\n- Outputs raw \\(cm\\) and normalized \\(0-1\\) values with statistics\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git push)",
       "Bash(grep:*)",
-      "Bash(latexmk:*)"
+      "Bash(latexmk:*)",
+      "Bash(mode:*)",
+      "Bash(powershell -Command \"Get-WMIObject Win32_SerialPort | Select-Object DeviceID, Description, Name\")",
+      "Bash(pio device list:*)",
+      "Bash(powershell -Command \"Get-PnpDevice -Class Ports -Status OK | Select-Object FriendlyName, InstanceId\")"
     ]
   }
 }
