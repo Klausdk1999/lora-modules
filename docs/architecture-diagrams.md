@@ -4,40 +4,40 @@
 
 ```mermaid
 graph TB
-    subgraph "Heltec WiFi LoRa 32 V2"
-        subgraph "ESP32 MCU"
-            CPU[ESP32 Dual Core<br/>240 MHz]
+    subgraph HeltecBoard[Heltec WiFi LoRa 32 V2]
+        subgraph MCU[ESP32 MCU]
+            CPU[ESP32 Dual Core 240MHz]
             FLASH[4MB Flash]
-            RTC[RTC Memory<br/>Session Storage]
+            RTC[RTC Memory]
         end
 
-        subgraph "LoRa Module"
-            SX1276[SX1276<br/>LoRa Transceiver]
-            ANT[915 MHz Antenna<br/>AU915 Band]
+        subgraph LoRaMod[LoRa Module]
+            SX1276[SX1276 Transceiver]
+            ANT[915MHz Antenna AU915]
         end
 
-        subgraph "Display"
-            OLED[0.96" OLED<br/>SSD1306<br/>128x64px]
+        subgraph Display[Display]
+            OLED[OLED SSD1306 128x64]
         end
 
-        subgraph "Power Management"
-            BATT[Battery ADC<br/>GPIO 37]
-            USB[USB-C<br/>5V Input]
+        subgraph PowerMgmt[Power Management]
+            BATT[Battery ADC GPIO37]
+            USB[USB-C 5V Input]
         end
     end
 
-    subgraph "External Sensors"
-        TF02[TF02-Pro LiDAR<br/>UART 115200<br/>Range: 0.1-22m]
-        DHT[DHT11<br/>Temp/Humidity]
+    subgraph ExtSensors[External Sensors]
+        TF02[TF02-Pro LiDAR UART]
+        DHT[DHT11 Temp Humidity]
     end
 
-    subgraph "Power Supply"
-        EXTBAT[External 5V Battery<br/>for TF02-Pro]
-        LIPO[3.7V LiPo<br/>for ESP32]
+    subgraph PowerSupply[Power Supply]
+        EXTBAT[External 5V Battery]
+        LIPO[3.7V LiPo Battery]
     end
 
-    TF02 -->|TX→GPIO13<br/>RX→GPIO17| CPU
-    DHT -->|DATA→GPIO25| CPU
+    TF02 -->|UART TX-GPIO13 RX-GPIO17| CPU
+    DHT -->|DATA GPIO25| CPU
     CPU <-->|SPI| SX1276
     SX1276 --- ANT
     CPU <-->|I2C| OLED
@@ -51,41 +51,37 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Application Layer"
-        MAIN[main.cpp<br/>Application Logic]
-        SEND[do_send<br/>Transmission Handler]
-        EVENT[onEvent<br/>LoRaWAN Events]
+    subgraph AppLayer[Application Layer]
+        MAIN[main.cpp Application Logic]
+        SEND[do_send Transmission Handler]
+        EVENT[onEvent LoRaWAN Events]
     end
 
-    subgraph "Sensor Processing"
-        READ[readLidarFiltered<br/>Sensor Reading]
-        DHT_READ[readDHTSensor<br/>Temp/Humidity]
+    subgraph SensorProc[Sensor Processing]
+        READ[readLidarFiltered]
+        DHT_READ[readDHTSensor]
     end
 
-    subgraph "Filtering Library"
-        subgraph "lib/filters"
-            MA[MovingAverage.h<br/>Statistical Smoothing]
-            KF[KalmanFilter.h<br/>State Estimation]
-            SF[SensorFilters.h<br/>Filter Chain]
-            AS[AdaptiveSampling.h<br/>Dynamic Intervals]
-        end
+    subgraph FilterLib[lib/filters]
+        MA[MovingAverage.h]
+        KF[KalmanFilter.h]
+        SF[SensorFilters.h]
+        AS[AdaptiveSampling.h]
     end
 
-    subgraph "Sensor Libraries"
-        subgraph "lib/sensors"
-            TF02LIB[TF02Pro.h<br/>LiDAR Driver]
-            BASE[SensorBase.h<br/>Interface]
-        end
+    subgraph SensorLib[lib/sensors]
+        TF02LIB[TF02Pro.h LiDAR Driver]
+        BASE[SensorBase.h Interface]
     end
 
-    subgraph "LoRaWAN Stack"
-        LMIC[MCCI LMIC<br/>LoRaWAN MAC]
-        HAL[ESP32 HAL<br/>Hardware Abstraction]
+    subgraph LoRaStack[LoRaWAN Stack]
+        LMIC[MCCI LMIC LoRaWAN MAC]
+        HAL[ESP32 HAL]
     end
 
-    subgraph "Data Structures"
-        PAYLOAD[SensorPayload<br/>16 bytes]
-        SESSION[RTC Session<br/>Deep Sleep Persistence]
+    subgraph DataStruct[Data Structures]
+        PAYLOAD[SensorPayload 16 bytes]
+        SESSION[RTC Session Storage]
     end
 
     MAIN --> SEND
@@ -108,102 +104,98 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "LilyGo T-Beam V1.2"
-        subgraph "ESP32 MCU"
-            CPU2[ESP32 Dual Core<br/>240 MHz]
+    subgraph LilyGoBoard[LilyGo T-Beam V1.2]
+        subgraph MCU2[ESP32 MCU]
+            CPU2[ESP32 Dual Core 240MHz]
             FLASH2[4MB Flash]
-            RTC2[RTC Memory<br/>Session Storage]
-            NVS[NVS Storage<br/>Calibration Data]
+            RTC2[RTC Memory]
+            NVS[NVS Calibration Storage]
         end
 
-        subgraph "Power Management"
-            AXP2101[AXP2101 PMIC<br/>I2C Interface]
-            CHG[Battery Charger<br/>500mA]
-            FUEL[Fuel Gauge<br/>Battery %]
+        subgraph PowerMgmt2[Power Management]
+            AXP2101[AXP2101 PMIC I2C]
+            CHG[Battery Charger 500mA]
+            FUEL[Fuel Gauge]
         end
 
-        subgraph "LoRa Module"
-            SX1276_2[SX1276<br/>LoRa Transceiver]
-            ANT2[915 MHz Antenna<br/>AU915 Band]
+        subgraph LoRaMod2[LoRa Module]
+            SX1276_2[SX1276 Transceiver]
+            ANT2[915MHz Antenna AU915]
         end
 
-        subgraph "GPS Module"
-            GPS[NEO-6M GPS<br/>Optional]
+        subgraph GPSMod[GPS Module]
+            GPS[NEO-6M GPS Optional]
         end
     end
 
-    subgraph "External Sensors"
-        TF02_2[TF02-Pro LiDAR<br/>UART 115200<br/>Range: 0.1-22m]
+    subgraph ExtSensors2[External Sensors]
+        TF02_2[TF02-Pro LiDAR UART 115200]
     end
 
-    subgraph "Power Supply"
-        BOOST[5V Boost Converter<br/>for TF02-Pro]
-        IMR[18650 Battery<br/>IMR 3.7V 2000mAh]
-        SOLAR[Solar Panel<br/>Optional 6W]
+    subgraph PowerSupply2[Power Supply]
+        BOOST[5V Boost Converter]
+        IMR[18650 Battery 3.7V 2000mAh]
+        SOLAR[Solar Panel 6W Optional]
     end
 
-    TF02_2 -->|TX→GPIO13<br/>RX→GPIO14| CPU2
-    CPU2 <-->|I2C SDA:21<br/>SCL:22| AXP2101
+    TF02_2 -->|UART TX-GPIO13 RX-GPIO14| CPU2
+    CPU2 <-->|I2C SDA21 SCL22| AXP2101
     AXP2101 --> CHG
     AXP2101 --> FUEL
     CPU2 <-->|SPI| SX1276_2
     SX1276_2 --- ANT2
     CPU2 <-->|UART| GPS
     IMR --> AXP2101
-    SOLAR -.->|Optional| AXP2101
+    SOLAR -.-> AXP2101
     BOOST -->|5V| TF02_2
     AXP2101 -->|3.3V| CPU2
-    AXP2101 -->|Enable| BOOST
+    AXP2101 --> BOOST
 ```
 
 ## 4. LilyGo T-Beam - Software Architecture
 
 ```mermaid
 graph TB
-    subgraph "Application Layer"
-        MAIN2[main.cpp<br/>Application Logic]
-        SEND2[do_send<br/>Transmission Handler]
-        EVENT2[onEvent<br/>LoRaWAN Events]
-        SLEEP[enterDeepSleep<br/>Power Management]
+    subgraph AppLayer2[Application Layer]
+        MAIN2[main.cpp Application Logic]
+        SEND2[do_send Transmission]
+        EVENT2[onEvent LoRaWAN Events]
+        SLEEP[enterDeepSleep]
     end
 
-    subgraph "Sensor Processing"
-        READ2[readSensorData<br/>With Filtering]
-        TEMPCOMP[applyTemperatureCompensation<br/>Based on Mohammed 2019]
+    subgraph SensorProc2[Sensor Processing]
+        READ2[readSensorData With Filtering]
+        TEMPCOMP[applyTemperatureCompensation]
     end
 
-    subgraph "Filtering Library"
-        subgraph "lib/filters"
-            MA2[MovingAverage.h]
-            KF2[KalmanFilter.h]
-            SF2[SensorFilters.h<br/>SensorFilterChain]
-            AS2[AdaptiveSampling.h]
-        end
+    subgraph FilterLib2[lib/filters]
+        MA2[MovingAverage.h]
+        KF2[KalmanFilter.h]
+        SF2[SensorFilters.h]
+        AS2[AdaptiveSampling.h]
     end
 
-    subgraph "Analytics Library"
-        subgraph "lib/analytics"
-            ANOM[AnomalyDetection.h]
-            STATS[StatisticalAnalysis.h]
-            TCOMP[TemperatureCompensation.h]
-        end
+    subgraph AnalyticsLib[lib/analytics]
+        ANOM[AnomalyDetection.h]
+        STATS[StatisticalAnalysis.h]
+        TCOMP[TemperatureCompensation.h]
     end
 
-    subgraph "Power Management"
-        PMU[XPowersLib<br/>AXP2101 Driver]
-        BATT2[getBatteryPercent<br/>getBatteryVoltage]
+    subgraph PowerMgmt3[Power Management]
+        PMU[XPowersLib AXP2101]
+        BATT2[getBatteryPercent]
     end
 
-    subgraph "LoRaWAN Stack"
-        LMIC2[MCCI LMIC<br/>LoRaWAN MAC]
+    subgraph LoRaStack2[LoRaWAN Stack]
+        LMIC2[MCCI LMIC]
         HAL2[ESP32 HAL]
     end
 
-    subgraph "Adaptive Behavior"
+    subgraph AdaptBehavior[Adaptive Behavior]
         ADAPT[calculateAdaptiveInterval]
         RIVER[calculateRiverLevel]
         HIST[updateHistoricalMinimum]
-        CALIB[NVS Calibration<br/>Load/Save]
+        CALIB[NVS Calibration]
     end
 
     MAIN2 --> SEND2
@@ -229,65 +221,57 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Sensor Nodes"
-        subgraph "Node 1: Heltec"
-            H1[Heltec WiFi LoRa 32 V2<br/>TF02-Pro + DHT11]
+    subgraph SensorNodes[Sensor Nodes]
+        subgraph Node1[Node 1 Heltec]
+            H1[Heltec WiFi LoRa 32 V2]
         end
-        subgraph "Node 2: LilyGo"
-            L1[LilyGo T-Beam V1.2<br/>TF02-Pro LiDAR]
+        subgraph Node2[Node 2 LilyGo]
+            L1[LilyGo T-Beam V1.2]
         end
-        subgraph "Node N..."
-            N1[Additional Nodes<br/>Ultrasonic/LiDAR]
-        end
-    end
-
-    subgraph "LoRaWAN Gateway"
-        GW[RAK7268<br/>8-Channel Gateway<br/>AU915]
-        GWETH[Ethernet/WiFi<br/>Backhaul]
-    end
-
-    subgraph "Network Server"
-        TTN[The Things Network<br/>V3 Stack]
-        MQTT_TTN[MQTT Broker<br/>Integration]
-        DECODER[Payload Decoder<br/>JavaScript]
-    end
-
-    subgraph "Backend Services"
-        subgraph "Go API Server"
-            API[go-data-storage<br/>REST API]
-            MQTT_CLIENT[MQTT Client<br/>TTN Subscription]
-            TTN_HANDLER[TTN Handler<br/>Webhook/MQTT]
-        end
-
-        subgraph "Database"
-            SQLITE[(SQLite<br/>sensor_data.db)]
-        end
-
-        subgraph "ML Backend"
-            LSTM[LSTM Forecaster<br/>Python/TensorFlow]
-            ALERT[Alert System<br/>SMS/Email/Webhook]
+        subgraph NodeN[Additional Nodes]
+            N1[Ultrasonic or LiDAR]
         end
     end
 
-    subgraph "Frontend"
-        DASH[Web Dashboard<br/>Real-time Monitoring]
-        MOBILE[Mobile App<br/>Optional]
+    subgraph GatewayInfra[LoRaWAN Gateway]
+        GW[RAK7268 8-Channel AU915]
+        BACKHAUL[Internet Backhaul]
     end
 
-    H1 -->|LoRa<br/>SF7 AU915| GW
-    L1 -->|LoRa<br/>SF7 AU915| GW
+    subgraph NetworkServer[Network Server]
+        TTN[The Things Network V3]
+        MQTT_TTN[MQTT Broker]
+        DECODER[Payload Decoder JS]
+    end
+
+    subgraph Backend[Backend Services]
+        subgraph GoAPI[Go API Server]
+            API[go-data-storage REST API]
+            MQTT_CLIENT[MQTT Client]
+            TTN_HANDLER[TTN Handler]
+        end
+
+        subgraph Database[Database]
+            SQLITE[(SQLite sensor_data.db)]
+        end
+    end
+
+    subgraph Frontend[Frontend]
+        DASH[Web Dashboard]
+    end
+
+    H1 -->|LoRa SF7 AU915| GW
+    L1 -->|LoRa SF7 AU915| GW
     N1 -.->|LoRa| GW
-    GW -->|GWETH| TTN
+    GW --> BACKHAUL
+    BACKHAUL --> TTN
     TTN --> MQTT_TTN
     TTN --> DECODER
-    MQTT_TTN -->|Subscribe| MQTT_CLIENT
+    MQTT_TTN --> MQTT_CLIENT
     MQTT_CLIENT --> TTN_HANDLER
     TTN_HANDLER --> API
     API <--> SQLITE
-    API --> LSTM
-    LSTM --> ALERT
     API --> DASH
-    API -.-> MOBILE
 ```
 
 ## 6. Data Flow Timeline
@@ -295,71 +279,55 @@ graph TB
 ```mermaid
 sequenceDiagram
     autonumber
-    participant S as Sensor<br/>(TF02-Pro)
-    participant M as MCU<br/>(ESP32)
-    participant F as Filters<br/>(MA+Kalman)
-    participant L as LoRa<br/>(SX1276)
-    participant G as Gateway<br/>(RAK7268)
-    participant T as TTN<br/>(Network Server)
-    participant A as API<br/>(Go Backend)
-    participant D as Database<br/>(SQLite)
-    participant ML as ML<br/>(LSTM)
-    participant AL as Alerts<br/>(SMS/Email)
-    participant UI as Dashboard<br/>(Web UI)
+    participant S as Sensor TF02-Pro
+    participant M as MCU ESP32
+    participant F as Filters
+    participant L as LoRa SX1276
+    participant G as Gateway
+    participant T as TTN
+    participant A as Go API
+    participant D as SQLite
+    participant UI as Dashboard
 
     Note over S,M: Sensor Reading Phase
-    S->>M: Raw Distance (UART)<br/>~100ms @ 10Hz
-    M->>M: Temperature Compensation<br/>v(T) = 331.5 + 0.607*T
+    S->>M: Raw Distance UART 10Hz
+    M->>M: Temperature Compensation
 
     Note over M,F: Filtering Phase
     M->>F: Raw Value
-    F->>F: Moving Average<br/>(5-sample window)
-    F->>F: Kalman Filter<br/>(State estimation)
-    F->>M: Filtered Values<br/>(Raw, MA, Kalman)
+    F->>F: Moving Average 5 samples
+    F->>F: Kalman Filter
+    F->>M: Filtered Values
 
     Note over M,M: Adaptive Sampling
     M->>M: Calculate Rate of Change
-    M->>M: Determine Next Interval<br/>(30s-5min adaptive)
+    M->>M: Determine Next Interval
 
     Note over M,L: Payload Construction
-    M->>M: Build 16-byte Payload<br/>{raw, ma, kalman, river_level, flags}
+    M->>M: Build 16-byte Payload
     M->>L: Queue Transmission
 
     Note over L,G: LoRaWAN Transmission
-    L->>G: Uplink SF7 AU915<br/>~100ms airtime
-    G->>G: Receive & Forward
+    L->>G: Uplink SF7 AU915
+    G->>G: Receive and Forward
 
     Note over G,T: Network Processing
-    G->>T: MQTT/HTTPS Uplink
-    T->>T: Payload Decoding<br/>(JavaScript decoder)
-    T->>T: Device Session Management
+    G->>T: MQTT Uplink
+    T->>T: Payload Decoding
+    T->>T: Session Management
 
     Note over T,A: Backend Integration
-    T->>A: MQTT Message<br/>or Webhook POST
-    A->>A: Parse & Validate
-    A->>D: Store Reading<br/>(INSERT INTO readings)
-
-    Note over A,ML: ML Processing
-    A->>ML: Trigger Prediction<br/>(if enough data)
-    ML->>ML: LSTM Forecast<br/>(6-hour prediction)
-    ML->>A: Prediction Result
-
-    Note over ML,AL: Alert Evaluation
-    ML->>AL: Check Thresholds
-    alt Critical Level Detected
-        AL->>AL: SMS via Twilio
-        AL->>AL: Email via SMTP
-        AL->>AL: Webhook POST
-    end
+    T->>A: MQTT or Webhook
+    A->>A: Parse and Validate
+    A->>D: Store Reading
 
     Note over A,UI: Dashboard Update
-    A->>UI: REST API Response<br/>/api/readings
+    A->>UI: REST API Response
     UI->>UI: Real-time Chart Update
-    UI->>UI: Map Visualization
 
     Note over M,M: Power Management
     M->>M: Save Session to RTC
-    M->>M: Enter Deep Sleep<br/>(adaptive interval)
+    M->>M: Enter Deep Sleep
     M->>M: Wake on Timer
 ```
 
@@ -367,24 +335,24 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    subgraph "LoRaWAN Payload (16 bytes)"
-        B0[Byte 0<br/>sensorType<br/>1=LiDAR]
-        B1[Bytes 1-2<br/>rawDistanceMm<br/>uint16]
-        B2[Bytes 3-4<br/>maDistanceMm<br/>uint16]
-        B3[Bytes 5-6<br/>kalmanDistanceMm<br/>uint16]
-        B4[Bytes 7-8<br/>riverLevelMm<br/>uint16]
-        B5[Bytes 9-10<br/>signalStrength<br/>int16]
-        B6[Byte 11<br/>temperature<br/>int8]
-        B7[Byte 12<br/>batteryPercent<br/>uint8]
-        B8[Byte 13<br/>flags<br/>uint8]
+    subgraph Payload[LoRaWAN Payload 16 bytes]
+        B0[Byte 0 sensorType]
+        B1[Bytes 1-2 rawDistanceMm]
+        B2[Bytes 3-4 maDistanceMm]
+        B3[Bytes 5-6 kalmanDistanceMm]
+        B4[Bytes 7-8 riverLevelMm]
+        B5[Bytes 9-10 signalStrength]
+        B6[Byte 11 temperature]
+        B7[Byte 12 batteryPercent]
+        B8[Byte 13 flags]
     end
 
-    subgraph "Flags Bitmap"
-        F0[Bit 0: RAPID_CHANGE]
-        F1[Bit 1: CRITICAL_LEVEL]
-        F2[Bit 2: BATTERY_LOW]
-        F3[Bit 3: SENSOR_ERROR]
-        F4[Bit 4: KALMAN_INIT]
+    subgraph FlagsBits[Flags Bitmap]
+        F0[Bit 0 RAPID_CHANGE]
+        F1[Bit 1 CRITICAL_LEVEL]
+        F2[Bit 2 BATTERY_LOW]
+        F3[Bit 3 SENSOR_ERROR]
+        F4[Bit 4 KALMAN_INIT]
     end
 
     B8 --> F0
@@ -399,30 +367,30 @@ graph LR
 ```mermaid
 flowchart LR
     subgraph Input
-        RAW[Raw Sensor<br/>Reading]
+        RAW[Raw Sensor Reading]
     end
 
-    subgraph "Moving Average Filter"
-        MA_BUF[Circular Buffer<br/>5 samples]
-        MA_CALC[Sum / Count]
+    subgraph MovingAvg[Moving Average Filter]
+        MA_BUF[Circular Buffer 5 samples]
+        MA_CALC[Calculate Average]
         MA_OUT[MA Value]
     end
 
-    subgraph "Kalman Filter"
-        PRED[Predict Step<br/>P = P + Q]
-        UPD[Update Step<br/>K = P/(P+R)]
-        EST[State Estimate<br/>x = x + K*innovation]
-        KF_OUT[Kalman Value<br/>+ Uncertainty]
+    subgraph KalmanFilt[Kalman Filter]
+        PRED[Predict Step]
+        UPD[Update Gain K]
+        EST[State Estimate]
+        KF_OUT[Kalman Value]
     end
 
-    subgraph "Adaptive Sampler"
-        RATE[Rate of Change<br/>cm/min]
-        THRESH[Threshold Check<br/>5cm = rapid]
-        INT[Interval Selection<br/>30s-5min]
+    subgraph AdaptSamp[Adaptive Sampler]
+        RATE[Rate of Change cm per min]
+        THRESH[Threshold Check 5cm rapid]
+        INT[Interval 30s to 5min]
     end
 
     subgraph Output
-        RESULT[FilteredReading<br/>raw, ma, kalman<br/>uncertainty, interval]
+        RESULT[FilteredReading]
     end
 
     RAW --> MA_BUF
@@ -447,17 +415,17 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> WAKE: Timer/Cold Boot
+    [*] --> WAKE: Timer or Cold Boot
 
     WAKE --> INIT: Initialize Hardware
 
     INIT --> RESTORE: Check RTC Memory
 
-    RESTORE --> JOINED: Valid Session?
+    RESTORE --> JOINED: Valid Session
     RESTORE --> JOINING: No Session
 
     JOINING --> JOINED: EV_JOINED
-    JOINING --> JOINING: EV_JOIN_FAILED<br/>(retry)
+    JOINING --> JOINING: EV_JOIN_FAILED retry
 
     JOINED --> READING: Read Sensors
 
@@ -469,21 +437,20 @@ stateDiagram-v2
 
     SENDING --> TX_COMPLETE: EV_TXCOMPLETE
 
-    TX_COMPLETE --> SAVE: Save Session<br/>to RTC
+    TX_COMPLETE --> SAVE: Save Session to RTC
 
     SAVE --> SLEEP: Enter Deep Sleep
 
     SLEEP --> WAKE: Timer Wakeup
 
     note right of SLEEP
-        Power: ~10µA
-        Duration: 30s-5min
-        (adaptive)
+        Power 10uA
+        Duration 30s-5min adaptive
     end note
 
     note right of SENDING
-        Power: ~120mA
-        Duration: ~100ms
+        Power 120mA
+        Duration 100ms
     end note
 ```
 
@@ -491,40 +458,40 @@ stateDiagram-v2
 
 ```mermaid
 graph TB
-    subgraph "River Monitoring Site"
-        subgraph "Bridge Installation"
-            NODE1[Sensor Node<br/>LilyGo T-Beam]
-            MOUNT[Mounting Bracket<br/>IP67 Enclosure]
-            PANEL[Solar Panel<br/>6W Optional]
+    subgraph RiverSite[River Monitoring Site]
+        subgraph BridgeInstall[Bridge Installation]
+            NODE1[Sensor Node LilyGo T-Beam]
+            MOUNT[Mounting Bracket IP67]
+            PANEL[Solar Panel 6W Optional]
         end
 
-        subgraph "River"
+        subgraph River[River]
             WATER[Water Surface]
             FLOW[Flow Direction]
         end
     end
 
-    subgraph "Gateway Site (1-15km)"
-        GW_SITE[LoRaWAN Gateway<br/>RAK7268]
-        INET[Internet<br/>Fiber/4G]
+    subgraph GatewaySite[Gateway Site 1-15km range]
+        GW_SITE[LoRaWAN Gateway RAK7268]
+        INET[Internet Fiber or 4G]
     end
 
-    subgraph "Cloud Infrastructure"
-        TTN_CLOUD[TTN Community<br/>or Private Stack]
-        VPS[VPS Server<br/>Go API + SQLite]
-        WEB[Web Dashboard<br/>HTTPS]
+    subgraph CloudInfra[Cloud Infrastructure]
+        TTN_CLOUD[TTN Community or Private]
+        VPS[VPS Server Go API SQLite]
+        WEB[Web Dashboard HTTPS]
     end
 
-    subgraph "Alert Recipients"
-        CIVIL[Civil Defense<br/>SMS Alerts]
-        ADMIN[System Admin<br/>Email Alerts]
-        PUBLIC[Public Dashboard<br/>Read-only]
+    subgraph AlertRecipients[Alert Recipients]
+        CIVIL[Civil Defense SMS]
+        ADMIN[System Admin Email]
+        PUBLIC[Public Dashboard]
     end
 
     NODE1 -->|LiDAR Beam| WATER
     PANEL -.-> NODE1
     NODE1 --> MOUNT
-    NODE1 -->|LoRa 915MHz<br/>up to 15km| GW_SITE
+    NODE1 -->|LoRa 915MHz up to 15km| GW_SITE
     GW_SITE --> INET
     INET --> TTN_CLOUD
     TTN_CLOUD --> VPS
