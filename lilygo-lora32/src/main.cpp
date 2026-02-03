@@ -46,6 +46,11 @@
 // Include the TF02-Pro sensor library
 #include "TF02Pro/TF02Pro.h"
 
+// Include filtering and adaptive sampling libraries
+#include "filters/SensorFilters.h"
+#include "filters/MovingAverage.h"
+#include "filters/AdaptiveSampling.h"
+
 // ============================================================================
 // Configuration Options
 // ============================================================================
@@ -197,20 +202,27 @@ RTC_DATA_ATTR float sensorHeightCm = DEFAULT_SENSOR_HEIGHT_CM;  // Configurable 
 // ============================================================================
 // Sensor Data Structure (for LoRa transmission)
 // ============================================================================
-// Extended payload with river level and adaptive sampling info
-// Total size: 12 bytes (fits well within LoRaWAN payload limits)
+// Extended payload with filtered values and river level info
+// Total size: 16 bytes (fits well within LoRaWAN payload limits)
 struct __attribute__((packed)) SensorPayload {
     uint8_t sensorType;         // 1 = TF02-Pro LiDAR, 0xFF = error
-    uint16_t distanceMm;        // Distance to water in millimeters
+    uint16_t rawDistanceMm;     // Raw distance in millimeters
+    uint16_t maDistanceMm;      // Moving average distance in mm
+    uint16_t kalmanDistanceMm;  // Kalman filtered distance in mm
     uint16_t riverLevelMm;      // Calculated river level in millimeters
     int16_t signalStrength;     // Signal strength (flux)
-    int8_t temperature;         // Temperature in Celsius (for compensation)
+    int8_t temperature;         // Temperature in Celsius
     uint8_t batteryPercent;     // Battery level (0-100) from AXP2101
-    uint8_t readingCount;       // Number of valid readings in average
-    uint8_t flags;              // Status flags: bit0=rapid_change, bit1=critical_level, bit2=battery_low
+    uint8_t flags;              // Status flags
+    // Flags: bit0=rapid_change, bit1=critical_level, bit2=battery_low, bit3=error, bit4=kalman_init
 };
 
 SensorPayload sensorData;
+
+// ============================================================================
+// Filter Chain Instance
+// ============================================================================
+SensorFilterChain<5> lidarFilterChain(KALMAN_LIDAR_NOISE, KALMAN_PROCESS_NOISE_NORMAL);
 
 // ============================================================================
 // Forward Declarations
@@ -461,13 +473,15 @@ void loop() {
     if (sensorInitialized) {
         // Read sensor data and print to Serial
         if (readSensorData()) {
-            Serial.print(F("\n>>> Test Reading Summary: "));
-            Serial.print(sensorData.distanceMm / 10.0f);
+            Serial.print(F("\n>>> Test Reading Summary: Raw="));
+            Serial.print(sensorData.rawDistanceMm / 10.0f);
+            Serial.print(F(" cm, MA="));
+            Serial.print(sensorData.maDistanceMm / 10.0f);
+            Serial.print(F(" cm, Kalman="));
+            Serial.print(sensorData.kalmanDistanceMm / 10.0f);
             Serial.print(F(" cm, Temp: "));
             Serial.print(sensorData.temperature);
-            Serial.print(F(" °C, Signal: "));
-            Serial.print(sensorData.signalStrength);
-            Serial.print(F(", Battery: "));
+            Serial.print(F(" °C, Battery: "));
             Serial.print(sensorData.batteryPercent);
             Serial.println(F("%"));
         } else {
@@ -521,21 +535,20 @@ SensorErrorCode lastSensorError = ERR_NONE;
 uint8_t consecutiveFailures = 0;
 
 // ============================================================================
-// Read Sensor Data with Temperature Compensation and Statistical Filtering
-// Based on Mohammed et al. (2019) and Tawalbeh et al. (2023) for temperature compensation, and Kabi et al. (2023) for filtering
-// Includes retry logic for improved reliability
+// Read Sensor Data with Moving Average, Kalman Filter, and Adaptive Sampling
+// Integrates filtering from SensorFilters.h library
 // ============================================================================
 bool readSensorData() {
     // Attempt sensor initialization retry if not yet initialized
     if (!sensorInitialized) {
         Serial.println(F("Sensor not initialized, attempting retry..."));
-        delay(SENSOR_WARMUP_MS);  // Give sensor time to stabilize
+        delay(SENSOR_WARMUP_MS);
 
         if (lidarSensor.begin()) {
             sensorInitialized = true;
             Serial.println(F("Sensor initialization successful on retry!"));
-            lidarSensor.setFrameRate(10);  // Set frame rate for power saving
-            delay(200);  // Allow frame rate change to take effect
+            lidarSensor.setFrameRate(10);
+            delay(200);
         } else {
             Serial.println(F("Sensor still not available, will send error payload"));
             lastSensorError = ERR_NOT_INITIALIZED;
@@ -555,203 +568,89 @@ bool readSensorData() {
             Serial.print(attempt + 1);
             Serial.print(F("/"));
             Serial.println(SENSOR_READ_RETRIES);
-            Serial.println(F("Waiting before retry..."));
             delay(SENSOR_RETRY_DELAY_MS);
-
-            // Clear serial buffer before retry
             lidarSensor.clearBuffer();
             delay(100);
         }
 
-        // Collect readings with temperature compensation
-        float distances[NUM_READINGS_AVG];
-        int16_t strengths[NUM_READINGS_AVG];
-        int16_t temps[NUM_READINGS_AVG];
-        uint8_t validReadings = 0;
-        uint8_t zeroReadings = 0;
-        uint8_t invalidReadings = 0;
+        // Single reading for filter processing
+        SensorReading reading = lidarSensor.read();
 
-        Serial.print(F("Taking "));
-        Serial.print(NUM_READINGS_AVG);
-        Serial.println(F(" readings..."));
-
-        // Take multiple readings
-        for (int i = 0; i < NUM_READINGS_AVG; i++) {
-            SensorReading reading = lidarSensor.read();
-
-            Serial.print(F("  ["));
-            Serial.print(i + 1);
-            Serial.print(F("] "));
-
-            if (!reading.valid) {
-                Serial.println(F("INVALID (no frame/checksum error)"));
-                invalidReadings++;
-                delay(READING_DELAY_MS);
-                continue;
-            }
-
-            // Check for zero reading (could be sensor error or actual measurement)
-            if (reading.distance_cm == 0) {
-                Serial.print(F("ZERO reading - signal: "));
-                Serial.print(reading.signal_strength);
-                Serial.print(F(", temp: "));
-                Serial.println(reading.temperature);
-                zeroReadings++;
-
-                // If signal strength is also 0 or very low, likely a sensor error
-                if (reading.signal_strength < 100) {
-                    Serial.println(F("      -> Low signal, treating as error"));
-                    delay(READING_DELAY_MS);
-                    continue;
-                }
-                // If signal is good but distance is 0, might be too close (< min range)
-                Serial.println(F("      -> Good signal, object may be too close"));
-            }
-
-            // Accept reading if distance > 0 OR (distance == 0 with good signal)
-            if (reading.distance_cm > 0 || (reading.distance_cm == 0 && reading.signal_strength >= 100)) {
-                float distance = reading.distance_cm;
-                bool tempValid = false;
-
-                // Check if temperature reading is valid (reasonable range: -40 to +85°C)
-                if (reading.temperature >= -40 && reading.temperature <= 85) {
-                    tempValid = true;
-                    distance = applyTemperatureCompensation(reading.distance_cm, reading.temperature);
-                }
-
-                distances[validReadings] = distance;
-                strengths[validReadings] = reading.signal_strength;
-                temps[validReadings] = reading.temperature;
-                validReadings++;
-
-                Serial.print(distance);
-                Serial.print(F(" cm"));
-                if (reading.distance_cm != distance) {
-                    Serial.print(F(" (raw: "));
-                    Serial.print(reading.distance_cm);
-                    Serial.print(F(")"));
-                }
-                Serial.print(F(", sig: "));
-                Serial.print(reading.signal_strength);
-                Serial.print(F(", temp: "));
-                Serial.print(reading.temperature);
-                if (!tempValid) {
-                    Serial.print(F(" (no comp)"));
-                }
-                Serial.println();
-            }
-
-            delay(READING_DELAY_MS);  // Delay between readings
-        }
-
-        // Log reading statistics
-        Serial.println(F("\n--- Reading Statistics ---"));
-        Serial.print(F("Valid: "));
-        Serial.print(validReadings);
-        Serial.print(F(", Zero: "));
-        Serial.print(zeroReadings);
-        Serial.print(F(", Invalid: "));
-        Serial.println(invalidReadings);
-
-        // Check if we have enough valid readings
-        if (validReadings < MIN_VALID_READINGS) {
-            Serial.print(F("ERROR: Insufficient valid readings (need >= "));
-            Serial.print(MIN_VALID_READINGS);
-            Serial.println(F(")"));
-
-            if (validReadings == 0 && zeroReadings > 0) {
-                lastSensorError = ERR_ALL_READINGS_ZERO;
-                Serial.println(F("Diagnosis: All readings were zero - check sensor range/target"));
-            } else if (invalidReadings == NUM_READINGS_AVG) {
-                lastSensorError = ERR_CHECKSUM_FAILURES;
-                Serial.println(F("Diagnosis: All readings had checksum errors - check wiring"));
-            } else {
-                lastSensorError = ERR_INSUFFICIENT_VALID;
-            }
-
-            // Continue to next retry attempt
+        if (!reading.valid || reading.distance_cm <= 0) {
+            Serial.println(F("Invalid reading, retrying..."));
+            lastSensorError = reading.valid ? ERR_ALL_READINGS_ZERO : ERR_CHECKSUM_FAILURES;
             continue;
         }
 
-        // We have enough valid readings - process them
-        Serial.println(F("\nProcessing valid readings..."));
-
-        // Calculate median for robust filtering (Kabi et al. 2023)
-        float medianDistance = calculateMedian(distances, validReadings);
-        Serial.print(F("  Median: "));
-        Serial.print(medianDistance);
-        Serial.println(F(" cm"));
-
-        // Filter outliers based on deviation from median
-        uint8_t filteredCount = validReadings;
-        float avgDistance = filterOutliers(distances, filteredCount, medianDistance, OUTLIER_THRESHOLD_PCT);
-
-        // Use median if filtering removed too many samples (fallback)
-        if (filteredCount < validReadings / 2) {
-            Serial.println(F("  Warning: Too many outliers, using median instead"));
-            avgDistance = medianDistance;
-            filteredCount = validReadings;
-        } else {
-            Serial.print(F("  Outliers removed: "));
-            Serial.print(validReadings - filteredCount);
-            Serial.print(F("/"));
-            Serial.println(validReadings);
+        // Apply temperature compensation
+        float compensatedDist = reading.distance_cm;
+        if (reading.temperature >= -40 && reading.temperature <= 85) {
+            compensatedDist = applyTemperatureCompensation(reading.distance_cm, reading.temperature);
         }
 
-        // Calculate averages for signal strength and temperature (from all valid readings)
-        int16_t sumStrength = 0;
-        int16_t sumTemp = 0;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            sumStrength += strengths[i];
-            sumTemp += temps[i];
+        // Process through filter chain (moving average + Kalman)
+        FilteredReading filtered = lidarFilterChain.process(
+            compensatedDist,
+            reading.signal_strength,
+            (int8_t)reading.temperature
+        );
+
+        if (!filtered.valid) {
+            Serial.println(F("Filter processing failed"));
+            continue;
         }
-        int16_t avgStrength = sumStrength / validReadings;
-        int8_t avgTemp = sumTemp / validReadings;
 
-        // Calculate river level from distance
-        float riverLevelCm = calculateRiverLevel(avgDistance);
+        // Use Kalman filtered value for river level calculation
+        float distanceForLevel = filtered.kalmanFiltered;
+        float riverLevelCm = calculateRiverLevel(distanceForLevel);
 
-        // Update historical minimum (lowest water = maximum distance from sensor)
-        updateHistoricalMinimum(avgDistance);
+        // Update historical minimum
+        updateHistoricalMinimum(distanceForLevel);
 
         // Get battery percentage
         uint8_t batteryPct = getBatteryPercent();
 
         // Calculate adaptive interval for next transmission
-        currentIntervalSec = calculateAdaptiveInterval(avgDistance, batteryPct);
+        currentIntervalSec = calculateAdaptiveInterval(distanceForLevel, batteryPct);
 
         // Build status flags
         uint8_t flags = 0;
-        float changeFromLast = abs(avgDistance - lastDistanceCm);
-        if (changeFromLast >= RAPID_CHANGE_CM) {
-            flags |= 0x01;  // Bit 0: rapid change detected
-        }
-        if (riverLevelCm >= CRITICAL_LEVEL_CM) {
-            flags |= 0x02;  // Bit 1: critical level exceeded
-        }
-        if (batteryPct < BATTERY_LOW_PERCENT) {
-            flags |= 0x04;  // Bit 2: battery low
-        }
+        float changeFromLast = abs(distanceForLevel - lastDistanceCm);
+        if (changeFromLast >= RAPID_CHANGE_CM) flags |= 0x01;
+        if (riverLevelCm >= CRITICAL_LEVEL_CM) flags |= 0x02;
+        if (batteryPct < BATTERY_LOW_PERCENT) flags |= 0x04;
+        if (lidarFilterChain.getKalmanFilter().isInitialized()) flags |= 0x10;
 
         // Update last distance for next comparison
-        lastDistanceCm = avgDistance;
+        lastDistanceCm = distanceForLevel;
 
-        // Fill payload structure
+        // Fill payload structure with filtered values
         sensorData.sensorType = 1;  // TF02-Pro
-        sensorData.distanceMm = (uint16_t)(avgDistance * 10);  // Convert cm to mm
-        sensorData.riverLevelMm = (uint16_t)(riverLevelCm * 10);  // River level in mm
-        sensorData.signalStrength = avgStrength;
-        sensorData.temperature = avgTemp;
+        sensorData.rawDistanceMm = (uint16_t)(filtered.rawValue * 10.0f);
+        sensorData.maDistanceMm = (uint16_t)(filtered.movingAverage * 10.0f);
+        sensorData.kalmanDistanceMm = (uint16_t)(filtered.kalmanFiltered * 10.0f);
+        sensorData.riverLevelMm = (uint16_t)(riverLevelCm * 10.0f);
+        sensorData.signalStrength = filtered.signalStrength;
+        sensorData.temperature = filtered.temperature;
         sensorData.batteryPercent = batteryPct;
-        sensorData.readingCount = filteredCount;
         sensorData.flags = flags;
 
         Serial.println(F("\n========================================"));
         Serial.println(F("       SENSOR READING SUCCESS"));
         Serial.println(F("========================================"));
-        Serial.print(F("Distance to water: "));
-        Serial.print(avgDistance);
+        Serial.print(F("Raw distance: "));
+        Serial.print(filtered.rawValue);
         Serial.println(F(" cm"));
+        Serial.print(F("Moving Average: "));
+        Serial.print(filtered.movingAverage);
+        Serial.print(F(" cm ("));
+        Serial.print(filtered.maSampleCount);
+        Serial.println(F(" samples)"));
+        Serial.print(F("Kalman Filter: "));
+        Serial.print(filtered.kalmanFiltered);
+        Serial.print(F(" cm (+/- "));
+        Serial.print(filtered.kalmanUncertainty);
+        Serial.println(F(" cm)"));
         Serial.print(F("River level: "));
         Serial.print(riverLevelCm);
         Serial.println(F(" cm"));
@@ -759,28 +658,25 @@ bool readSensorData() {
         Serial.print(historicalMinDistCm);
         Serial.println(F(" cm"));
         Serial.print(F("Signal Strength: "));
-        Serial.println(avgStrength);
+        Serial.println(filtered.signalStrength);
         Serial.print(F("Temperature: "));
-        Serial.print(avgTemp);
+        Serial.print(filtered.temperature);
         Serial.println(F(" C"));
         Serial.print(F("Battery: "));
         Serial.print(batteryPct);
         Serial.print(F("% ("));
         Serial.print(getBatteryVoltage());
         Serial.println(F(" mV)"));
-        Serial.print(F("Valid readings: "));
-        Serial.print(filteredCount);
-        Serial.print(F("/"));
-        Serial.println(validReadings);
         Serial.print(F("Flags: 0x"));
         Serial.print(flags, HEX);
         if (flags & 0x01) Serial.print(F(" [RAPID_CHANGE]"));
         if (flags & 0x02) Serial.print(F(" [CRITICAL_LEVEL]"));
         if (flags & 0x04) Serial.print(F(" [BATTERY_LOW]"));
+        if (flags & 0x10) Serial.print(F(" [KALMAN_OK]"));
         Serial.println();
         Serial.print(F("Next interval: "));
         Serial.print(currentIntervalSec);
-        Serial.println(F(" sec"));
+        Serial.println(F(" sec (adaptive)"));
         if (attempt > 0) {
             Serial.print(F("Success after "));
             Serial.print(attempt + 1);
@@ -788,10 +684,8 @@ bool readSensorData() {
         }
         Serial.println(F("========================================"));
 
-        // Reset error tracking on success
         lastSensorError = ERR_NONE;
         consecutiveFailures = 0;
-
         return true;
     }
 
@@ -1031,8 +925,12 @@ void do_send(osjob_t* j) {
 
         Serial.print(F(">>> Sending packet #"));
         Serial.print(packetCount);
-        Serial.print(F(": "));
-        Serial.print(sensorData.distanceMm / 10.0f);
+        Serial.print(F(": Raw="));
+        Serial.print(sensorData.rawDistanceMm / 10.0f);
+        Serial.print(F(" MA="));
+        Serial.print(sensorData.maDistanceMm / 10.0f);
+        Serial.print(F(" Kalman="));
+        Serial.print(sensorData.kalmanDistanceMm / 10.0f);
         Serial.println(F(" cm"));
 
         // Send the payload
@@ -1050,15 +948,15 @@ void do_send(osjob_t* j) {
 
         uint8_t batteryPct = getBatteryPercent();
 
-        // Use SENSOR_ERROR_VALUE (-1) converted to unsigned for distanceMm to indicate error
-        // This is 0xFFFF (65535) which is clearly invalid for a distance measurement
+        // Use 0xFFFF to indicate error for all distance values
         sensorData.sensorType = 0xFF;  // Error indicator
-        sensorData.distanceMm = 0xFFFF;  // -1 as unsigned = error sentinel
-        sensorData.riverLevelMm = 0xFFFF;  // -1 as unsigned = error sentinel
-        sensorData.signalStrength = (int16_t)lastSensorError;  // Store error code in signal strength field
-        sensorData.temperature = INVALID_TEMPERATURE_VALUE;  // Sentinel value for unavailable temp
+        sensorData.rawDistanceMm = 0xFFFF;
+        sensorData.maDistanceMm = 0xFFFF;
+        sensorData.kalmanDistanceMm = 0xFFFF;
+        sensorData.riverLevelMm = 0xFFFF;
+        sensorData.signalStrength = (int16_t)lastSensorError;
+        sensorData.temperature = INVALID_TEMPERATURE_VALUE;
         sensorData.batteryPercent = batteryPct;
-        sensorData.readingCount = consecutiveFailures;  // Store consecutive failure count
         sensorData.flags = (batteryPct < BATTERY_LOW_PERCENT) ? 0x04 : 0x00;
         sensorData.flags |= 0x08;  // Bit 3: sensor error flag
 
@@ -1066,8 +964,8 @@ void do_send(osjob_t* j) {
         currentIntervalSec = TX_INTERVAL_NORMAL_SEC;
 
         Serial.println(F("Error payload contents:"));
-        Serial.print(F("  sensorType: 0xFF (error)"));
-        Serial.print(F("  distanceMm: 0xFFFF (error sentinel)"));
+        Serial.println(F("  sensorType: 0xFF (error)"));
+        Serial.println(F("  all distances: 0xFFFF (error sentinel)"));
         Serial.print(F("  errorCode: "));
         Serial.println(lastSensorError);
         Serial.print(F("  consecutiveFailures: "));

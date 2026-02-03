@@ -38,14 +38,37 @@
 // Include TF02-Pro sensor library
 #include "TF02Pro/TF02Pro.h"
 
+// Include filtering and adaptive sampling libraries
+#include "filters/SensorFilters.h"
+#include "filters/MovingAverage.h"
+#include "filters/AdaptiveSampling.h"
+
 // ============================================================================
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true
-#define TX_INTERVAL_SECONDS     10      // 10 seconds between transmissions (rapid testing mode)
 #define NUM_READINGS_AVG        5       // Number of readings to average
 #define READING_DELAY_MS        150     // Delay between readings (TF02-Pro at 10Hz = 100ms min)
 #define DEEP_SLEEP_ENABLED      true
+
+// ============================================================================
+// Adaptive Sampling Configuration
+// ============================================================================
+// Based on Ragnoli et al. (2020) and thesis requirements:
+// "If the river rises >5cm/min, transmit every 1 minute. If stable, transmit every 30 minutes"
+#define TX_INTERVAL_MIN_SEC     30      // Minimum interval: 30 seconds (rapid change mode)
+#define TX_INTERVAL_NORMAL_SEC  120     // Normal interval: 2 minutes (standard operation)
+#define TX_INTERVAL_MAX_SEC     300     // Maximum interval: 5 minutes (stable/low battery)
+#define TX_INTERVAL_EMERGENCY   60      // Emergency interval: 1 minute (rapid change)
+
+// Thresholds for adaptive behavior
+#define CHANGE_THRESHOLD_CM     2.0f    // Level change threshold for faster sampling
+#define RAPID_CHANGE_CM         5.0f    // Rapid change threshold (triggers emergency mode)
+#define CRITICAL_LEVEL_CM       50.0f   // Critical river level threshold
+#define BATTERY_LOW_PERCENT     20      // Low battery threshold
+
+// River level calculation
+#define DEFAULT_SENSOR_HEIGHT_CM 400.0f // Sensor height above riverbed (calibrate on install)
 
 // ============================================================================
 // Sensor Reliability Configuration
@@ -169,19 +192,32 @@ float lastDistance = 0;
 // ============================================================================
 // Sensor Data Structure (for LoRa transmission)
 // ============================================================================
-// Total size: 12 bytes
+// Extended payload with filtered values - Total size: 16 bytes
 struct __attribute__((packed)) SensorPayload {
     uint8_t sensorType;         // 1 = TF02-Pro, 0xFF = error
-    int16_t distanceMm;         // Distance in mm (-1 = error)
+    uint16_t rawDistanceMm;     // Raw distance in mm (0xFFFF = error)
+    uint16_t maDistanceMm;      // Moving average distance in mm
+    uint16_t kalmanDistanceMm;  // Kalman filtered distance in mm
     int16_t signalStrength;     // Signal strength (flux)
     int8_t sensorTemp;          // TF02-Pro internal temperature
     int8_t ambientTemp;         // DHT11 temperature (Celsius)
     uint8_t humidity;           // DHT11 humidity (%)
     uint8_t batteryPercent;     // Battery level (0-100)
-    uint8_t readingCount;       // Number of valid readings
+    uint8_t flags;              // Status flags: bit0=rapid_change, bit1=critical, bit2=batt_low, bit4=kalman_init
 };
 
 SensorPayload sensorData;
+
+// ============================================================================
+// Filtering and Adaptive Sampling Instances
+// ============================================================================
+SensorFilterChain<5> lidarFilterChain(KALMAN_LIDAR_NOISE, KALMAN_PROCESS_NOISE_NORMAL);
+AdaptiveSampler adaptiveSampler;
+
+// Adaptive sampling state (stored in RTC memory to survive deep sleep)
+RTC_DATA_ATTR float lastDistanceCm = 0.0f;
+RTC_DATA_ATTR uint32_t currentIntervalSec = TX_INTERVAL_NORMAL_SEC;
+RTC_DATA_ATTR float sensorHeightCm = DEFAULT_SENSOR_HEIGHT_CM;
 
 // ============================================================================
 // Forward Declarations
@@ -193,11 +229,13 @@ uint8_t getBatteryPercent();
 void updateDisplay();
 void enterDeepSleep(uint32_t sleepSeconds);
 float calculateMedian(float readings[], uint8_t count);
-int16_t readLidarAverage(int16_t& strength, int16_t& sensorTemp);
+FilteredReading readLidarFiltered(int16_t& sensorTemp);
 bool readDHTSensor(float& temperature, float& humidity);
 void saveSession();
 bool restoreSession();
 void clearSession();
+uint32_t calculateAdaptiveInterval(float currentDistCm, float riverLevelCm, uint8_t batteryPct);
+float calculateRiverLevel(float distanceCm);
 
 // ============================================================================
 // Setup
@@ -353,17 +391,20 @@ void loop() {
         // Additional delay to ensure all LoRa operations are complete
         delay(2000);
         Serial.print(F("\nEntering deep sleep for "));
-        Serial.print(TX_INTERVAL_SECONDS);
-        Serial.println(F(" seconds..."));
+        Serial.print(currentIntervalSec);
+        Serial.println(F(" seconds (adaptive)..."));
         Serial.flush();
-        enterDeepSleep(TX_INTERVAL_SECONDS);
+        enterDeepSleep(currentIntervalSec);
     }
 }
 
 // ============================================================================
-// Read LiDAR - Single Reading (returns -1 on error)
+// Read LiDAR with Moving Average and Kalman Filtering
 // ============================================================================
-int16_t readLidarAverage(int16_t& avgStrength, int16_t& avgSensorTemp) {
+FilteredReading readLidarFiltered(int16_t& avgSensorTemp) {
+    FilteredReading result = {};
+    result.valid = false;
+
     if (!lidarInitialized) {
         Serial.println(F("TF02-Pro not initialized, attempting retry..."));
         delay(500);
@@ -375,98 +416,43 @@ int16_t readLidarAverage(int16_t& avgStrength, int16_t& avgSensorTemp) {
             Serial.println(F("  TF02-Pro reinitialized successfully"));
         } else {
             Serial.println(F("  TF02-Pro still not available"));
-            return SENSOR_ERROR_VALUE;
+            return result;
         }
     }
 
-    // Single reading mode for testing
-    Serial.println(F("Reading TF02-Pro (single reading)..."));
+    Serial.println(F("Reading TF02-Pro (single reading with filtering)..."));
 
     SensorReading reading = lidarSensor.read();
 
     if (reading.valid && reading.distance_cm > 0) {
-        avgStrength = reading.signal_strength;
         avgSensorTemp = reading.temperature;
 
-        Serial.print(F("  Distance: "));
+        // Process through filter chain (moving average + Kalman)
+        result = lidarFilterChain.process(
+            reading.distance_cm,
+            reading.signal_strength,
+            (int8_t)reading.temperature
+        );
+
+        Serial.print(F("  Raw: "));
         Serial.print(reading.distance_cm);
-        Serial.print(F(" cm, sig: "));
+        Serial.print(F(" cm, MA: "));
+        Serial.print(result.movingAverage);
+        Serial.print(F(" cm, Kalman: "));
+        Serial.print(result.kalmanFiltered);
+        Serial.print(F(" cm"));
+        Serial.print(F(", sig: "));
         Serial.print(reading.signal_strength);
         Serial.print(F(", temp: "));
         Serial.print(reading.temperature);
         Serial.println(F(" C"));
 
-        lastDistance = reading.distance_cm;
-        return (int16_t)(reading.distance_cm * 10);  // Return in mm
+        lastDistance = result.kalmanFiltered;  // Use Kalman for display
     } else {
         Serial.println(F("  ERROR: Invalid reading"));
-        return SENSOR_ERROR_VALUE;
     }
 
-    /* AVERAGING CODE - Uncomment to restore averaging
-    float distances[NUM_READINGS_AVG];
-    int16_t strengths[NUM_READINGS_AVG];
-    int16_t temps[NUM_READINGS_AVG];
-    uint8_t validCount = 0;
-
-    Serial.println(F("Reading TF02-Pro (5 samples)..."));
-
-    for (int i = 0; i < NUM_READINGS_AVG; i++) {
-        SensorReading reading = lidarSensor.read();
-
-        Serial.print(F("  ["));
-        Serial.print(i + 1);
-        Serial.print(F("] "));
-
-        if (reading.valid && reading.distance_cm > 0) {
-            distances[validCount] = reading.distance_cm;
-            strengths[validCount] = reading.signal_strength;
-            temps[validCount] = reading.temperature;
-            validCount++;
-
-            Serial.print(reading.distance_cm);
-            Serial.print(F(" cm, sig: "));
-            Serial.print(reading.signal_strength);
-            Serial.print(F(", temp: "));
-            Serial.print(reading.temperature);
-            Serial.println(F(" C"));
-        } else {
-            Serial.println(F("INVALID"));
-        }
-
-        delay(READING_DELAY_MS);
-        yield();  // Prevent watchdog timeout
-    }
-
-    if (validCount < MIN_VALID_READINGS) {
-        Serial.println(F("  ERROR: Insufficient valid LiDAR readings"));
-        return SENSOR_ERROR_VALUE;
-    }
-
-    // Calculate median for distance
-    float median = calculateMedian(distances, validCount);
-
-    // Calculate averages for strength and temperature
-    int32_t sumStrength = 0;
-    int32_t sumTemp = 0;
-    for (uint8_t i = 0; i < validCount; i++) {
-        sumStrength += strengths[i];
-        sumTemp += temps[i];
-    }
-    avgStrength = sumStrength / validCount;
-    avgSensorTemp = sumTemp / validCount;
-
-    Serial.print(F("  TF02-Pro median: "));
-    Serial.print(median);
-    Serial.print(F(" cm, avg strength: "));
-    Serial.print(avgStrength);
-    Serial.print(F(", avg temp: "));
-    Serial.print(avgSensorTemp);
-    Serial.println(F(" C"));
-
-    lastDistance = median;
-    return (int16_t)(median * 10);  // Return in mm
-    */
+    return result;
 }
 
 // ============================================================================
@@ -507,7 +493,7 @@ bool readDHTSensor(float& temperature, float& humidity) {
 }
 
 // ============================================================================
-// Read All Sensors
+// Read All Sensors with Filtering and Adaptive Sampling
 // ============================================================================
 bool readAllSensors() {
     Serial.println(F("\n========================================"));
@@ -518,16 +504,52 @@ bool readAllSensors() {
     float ambientTemp, humidity;
     bool dhtSuccess = readDHTSensor(ambientTemp, humidity);
 
-    // Read TF02-Pro
-    int16_t lidarStrength = 0;
+    // Read TF02-Pro with filtering
     int16_t sensorTemp = 0;
-    int16_t distanceMm = readLidarAverage(lidarStrength, sensorTemp);
+    FilteredReading filteredReading = readLidarFiltered(sensorTemp);
 
-    // Fill payload
-    sensorData.sensorType = (distanceMm > 0) ? 1 : 0xFF;
-    sensorData.distanceMm = distanceMm;
-    sensorData.signalStrength = lidarStrength;
-    sensorData.sensorTemp = (int8_t)sensorTemp;
+    // Calculate river level
+    float riverLevelCm = 0.0f;
+    float distanceForCalc = 0.0f;
+    if (filteredReading.valid) {
+        distanceForCalc = filteredReading.kalmanFiltered;
+        riverLevelCm = calculateRiverLevel(distanceForCalc);
+    }
+
+    // Get battery percentage
+    uint8_t batteryPct = getBatteryPercent();
+
+    // Calculate adaptive interval for next transmission
+    currentIntervalSec = calculateAdaptiveInterval(distanceForCalc, riverLevelCm, batteryPct);
+
+    // Build payload with filtered values
+    if (filteredReading.valid) {
+        sensorData.sensorType = 1;  // TF02-Pro
+        sensorData.rawDistanceMm = (uint16_t)(filteredReading.rawValue * 10.0f);
+        sensorData.maDistanceMm = (uint16_t)(filteredReading.movingAverage * 10.0f);
+        sensorData.kalmanDistanceMm = (uint16_t)(filteredReading.kalmanFiltered * 10.0f);
+        sensorData.signalStrength = filteredReading.signalStrength;
+        sensorData.sensorTemp = (int8_t)sensorTemp;
+
+        // Build status flags
+        float changeFromLast = abs(distanceForCalc - lastDistanceCm);
+        sensorData.flags = 0;
+        if (changeFromLast >= RAPID_CHANGE_CM) sensorData.flags |= 0x01;  // Rapid change
+        if (riverLevelCm >= CRITICAL_LEVEL_CM) sensorData.flags |= 0x02;  // Critical level
+        if (batteryPct < BATTERY_LOW_PERCENT) sensorData.flags |= 0x04;   // Battery low
+        if (lidarFilterChain.getKalmanFilter().isInitialized()) sensorData.flags |= 0x10;  // Kalman init
+
+        // Update last distance for next comparison
+        lastDistanceCm = distanceForCalc;
+    } else {
+        sensorData.sensorType = 0xFF;
+        sensorData.rawDistanceMm = 0xFFFF;
+        sensorData.maDistanceMm = 0xFFFF;
+        sensorData.kalmanDistanceMm = 0xFFFF;
+        sensorData.signalStrength = 0;
+        sensorData.sensorTemp = (int8_t)sensorTemp;
+        sensorData.flags = 0x08;  // Sensor error
+    }
 
     if (dhtSuccess) {
         sensorData.ambientTemp = (int8_t)round(ambientTemp);
@@ -537,28 +559,35 @@ bool readAllSensors() {
         sensorData.humidity = 0;
     }
 
-    sensorData.batteryPercent = getBatteryPercent();
-
-    // Count valid readings
-    uint8_t validCount = 0;
-    if (distanceMm > 0) validCount++;
-    if (dhtSuccess) validCount++;
-    sensorData.readingCount = validCount;
+    sensorData.batteryPercent = batteryPct;
 
     // Print summary
     Serial.println(F("\n========================================"));
     Serial.println(F("       SENSOR READING SUMMARY"));
     Serial.println(F("========================================"));
-    Serial.print(F("TF02-Pro Distance: "));
-    if (distanceMm > 0) {
-        Serial.print(distanceMm / 10.0f);
+    if (filteredReading.valid) {
+        Serial.print(F("Raw Distance: "));
+        Serial.print(filteredReading.rawValue);
+        Serial.println(F(" cm"));
+        Serial.print(F("Moving Avg: "));
+        Serial.print(filteredReading.movingAverage);
+        Serial.print(F(" cm ("));
+        Serial.print(filteredReading.maSampleCount);
+        Serial.println(F(" samples)"));
+        Serial.print(F("Kalman Filter: "));
+        Serial.print(filteredReading.kalmanFiltered);
+        Serial.print(F(" cm (+/- "));
+        Serial.print(filteredReading.kalmanUncertainty);
+        Serial.println(F(" cm)"));
+        Serial.print(F("River Level: "));
+        Serial.print(riverLevelCm);
         Serial.println(F(" cm"));
     } else {
-        Serial.println(F("ERROR"));
+        Serial.println(F("TF02-Pro: ERROR"));
     }
-    Serial.print(F("TF02-Pro Signal: "));
-    Serial.println(lidarStrength);
-    Serial.print(F("TF02-Pro Temp: "));
+    Serial.print(F("Signal Strength: "));
+    Serial.println(filteredReading.signalStrength);
+    Serial.print(F("Sensor Temp: "));
     Serial.print(sensorTemp);
     Serial.println(F(" C"));
     Serial.print(F("Ambient Temp: "));
@@ -576,12 +605,86 @@ bool readAllSensors() {
         Serial.println(F("ERROR"));
     }
     Serial.print(F("Battery: "));
-    Serial.print(sensorData.batteryPercent);
+    Serial.print(batteryPct);
     Serial.println(F("%"));
+    Serial.print(F("Flags: 0x"));
+    Serial.print(sensorData.flags, HEX);
+    if (sensorData.flags & 0x01) Serial.print(F(" [RAPID]"));
+    if (sensorData.flags & 0x02) Serial.print(F(" [CRITICAL]"));
+    if (sensorData.flags & 0x04) Serial.print(F(" [BATT_LOW]"));
+    if (sensorData.flags & 0x10) Serial.print(F(" [KALMAN_OK]"));
+    Serial.println();
+    Serial.print(F("Next interval: "));
+    Serial.print(currentIntervalSec);
+    Serial.println(F(" sec (adaptive)"));
     Serial.println(F("========================================"));
 
-    currentStatus = (distanceMm > 0) ? STATUS_CONNECTED : STATUS_SENSOR_ERROR;
-    return (distanceMm > 0 || dhtSuccess);
+    currentStatus = filteredReading.valid ? STATUS_CONNECTED : STATUS_SENSOR_ERROR;
+    return filteredReading.valid || dhtSuccess;
+}
+
+// ============================================================================
+// Calculate River Level from Distance
+// ============================================================================
+float calculateRiverLevel(float distanceCm) {
+    if (distanceCm >= sensorHeightCm) {
+        return 0.0f;
+    }
+    return sensorHeightCm - distanceCm;
+}
+
+// ============================================================================
+// Calculate Adaptive Sampling Interval
+// Based on Ragnoli et al. (2020) and thesis requirements
+// ============================================================================
+uint32_t calculateAdaptiveInterval(float currentDistCm, float riverLevelCm, uint8_t batteryPct) {
+    Serial.println(F("\n--- Adaptive Interval Calculation ---"));
+
+    // Calculate change from last reading
+    float changeFromLast = abs(currentDistCm - lastDistanceCm);
+    Serial.print(F("  Change from last: "));
+    Serial.print(changeFromLast);
+    Serial.println(F(" cm"));
+    Serial.print(F("  River level: "));
+    Serial.print(riverLevelCm);
+    Serial.println(F(" cm"));
+    Serial.print(F("  Battery: "));
+    Serial.print(batteryPct);
+    Serial.println(F("%"));
+
+    // Priority 1: Battery conservation
+    if (batteryPct < BATTERY_LOW_PERCENT) {
+        Serial.println(F("  -> BATTERY_LOW: Using maximum interval"));
+        return TX_INTERVAL_MAX_SEC;
+    }
+
+    // Priority 2: Rapid change (flood warning)
+    if (changeFromLast >= RAPID_CHANGE_CM) {
+        Serial.println(F("  -> RAPID_CHANGE: Using emergency interval"));
+        return TX_INTERVAL_EMERGENCY;
+    }
+
+    // Priority 3: Critical level
+    if (riverLevelCm >= CRITICAL_LEVEL_CM) {
+        Serial.println(F("  -> CRITICAL_LEVEL: Using minimum interval"));
+        return TX_INTERVAL_MIN_SEC;
+    }
+
+    // Priority 4: Moderate change
+    if (changeFromLast >= CHANGE_THRESHOLD_CM) {
+        float changeRatio = changeFromLast / RAPID_CHANGE_CM;
+        if (changeRatio > 1.0f) changeRatio = 1.0f;
+        uint32_t interval = TX_INTERVAL_NORMAL_SEC -
+            (uint32_t)((TX_INTERVAL_NORMAL_SEC - TX_INTERVAL_MIN_SEC) * changeRatio);
+        Serial.print(F("  -> MODERATE_CHANGE: Using "));
+        Serial.print(interval);
+        Serial.println(F(" sec"));
+        return interval;
+    }
+
+    // Default: Normal interval
+    Serial.println(F("  -> STABLE: Using normal interval"));
+    return TX_INTERVAL_NORMAL_SEC;
 }
 
 // ============================================================================
@@ -824,7 +927,10 @@ void do_send(osjob_t* j) {
     } else {
         Serial.println(F("\n>>> SENDING ERROR PACKET <<<"));
         sensorData.sensorType = 0xFF;
-        sensorData.distanceMm = 0xFFFF;
+        sensorData.rawDistanceMm = 0xFFFF;
+        sensorData.maDistanceMm = 0xFFFF;
+        sensorData.kalmanDistanceMm = 0xFFFF;
+        sensorData.flags = 0x08;  // Sensor error flag
 
         uint8_t result = LMIC_setTxData2(1, (uint8_t*)&sensorData, sizeof(sensorData), 0);
         if (result) {
@@ -914,10 +1020,13 @@ void onEvent(ev_t ev) {
 
             if (DEEP_SLEEP_ENABLED) {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds (deep sleep)"));
+                Serial.print(currentIntervalSec);
+                Serial.println(F(" seconds (adaptive, deep sleep)"));
             } else {
-                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL_SECONDS), do_send);
+                Serial.print(F("Next transmission in "));
+                Serial.print(currentIntervalSec);
+                Serial.println(F(" seconds (adaptive)"));
+                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(currentIntervalSec), do_send);
             }
             break;
 

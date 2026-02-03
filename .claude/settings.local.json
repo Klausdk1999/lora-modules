@@ -22,7 +22,9 @@
       "Bash(mode:*)",
       "Bash(powershell -Command \"Get-WMIObject Win32_SerialPort | Select-Object DeviceID, Description, Name\")",
       "Bash(pio device list:*)",
-      "Bash(powershell -Command \"Get-PnpDevice -Class Ports -Status OK | Select-Object FriendlyName, InstanceId\")"
+      "Bash(powershell -Command \"Get-PnpDevice -Class Ports -Status OK | Select-Object FriendlyName, InstanceId\")",
+      "Bash(ls:*)",
+      "Bash(wc:*)"
     ]
   }
 }
