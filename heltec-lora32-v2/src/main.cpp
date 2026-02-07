@@ -9,7 +9,7 @@
  * - Frequency: AU915 (Australia/Brazil)
  * - Sensor: JSN-SR04T (Waterproof Ultrasonic, GPIO interface)
  * - Power: External battery board with deep sleep
- * - Transmission interval: 15 minutes (as per thesis)
+ * - Transmission interval: Adaptive (1-30 min based on change rate)
  * 
  * Wiring (Ultrasonic to Heltec LoRa32 V2):
  *   VCC  -> 5V (or 3.3V for JSN-SR04T)
@@ -44,12 +44,28 @@
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true    // Enable serial output for debugging
-#define TX_INTERVAL_SECONDS     120     // Send data every 2 minutes (reduced from 15 min for testing)
-#define NUM_READINGS_AVG        7       // Number of readings for median filtering (odd number recommended)
-#define READING_DELAY_MS        100     // Delay between readings (ms) - increased for sensor stability
+#define NUM_READINGS_AVG        10      // Number of readings per sensor for averaging
+#define READING_DELAY_MS        100     // Delay between readings (ms)
 #define DEEP_SLEEP_ENABLED      true    // Enable deep sleep between transmissions
-#define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% deviation from median
+#define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% from median
 #define DEFAULT_TEMPERATURE     25.0f   // Default temperature (Celsius) if sensor unavailable
+
+// ============================================================================
+// Adaptive Sleep Configuration
+// ============================================================================
+#define SLEEP_INTERVAL_VERY_SLOW    1800    // 30 min - very slow change rate
+#define SLEEP_INTERVAL_SLOW         1200    // 20 min - slow change
+#define SLEEP_INTERVAL_MODERATE     600     // 10 min - moderate change
+#define SLEEP_INTERVAL_FAST         300     // 5 min - fast change
+#define SLEEP_INTERVAL_RAPID        60      // 1 min - rapid change
+#define SLEEP_INTERVAL_DEFAULT      60      // 1 min - default (first boot, then adapts)
+
+// Change rate thresholds (mm between consecutive readings)
+#define CHANGE_THRESHOLD_VERY_SLOW  2       // <= 2mm  -> 30 min
+#define CHANGE_THRESHOLD_SLOW       5       // <= 5mm  -> 20 min
+#define CHANGE_THRESHOLD_MODERATE   15      // <= 15mm -> 10 min
+#define CHANGE_THRESHOLD_FAST       50      // <= 50mm -> 5 min
+                                            // > 50mm  -> 1 min
 
 // ============================================================================
 // Sensor Reliability Configuration
@@ -154,6 +170,13 @@ Status currentStatus = STATUS_INIT;
 float lastDistance = 0;
 
 // ============================================================================
+// Adaptive Sleep State (RTC Memory - survives deep sleep)
+// ============================================================================
+RTC_DATA_ATTR int16_t rtcLastDistanceMm = 0;
+RTC_DATA_ATTR bool rtcHasPreviousReading = false;
+RTC_DATA_ATTR uint32_t rtcCurrentInterval = SLEEP_INTERVAL_DEFAULT;
+
+// ============================================================================
 // Sensor Data Structure (for LoRa transmission)
 // ============================================================================
 struct __attribute__((packed)) SensorPayload {
@@ -179,6 +202,7 @@ void enterDeepSleep(uint32_t sleepSeconds);
 float getAmbientTemperature();
 float calculateMedian(float readings[], uint8_t count);
 float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct);
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm);
 
 // ============================================================================
 // Setup
@@ -319,9 +343,13 @@ void loop() {
     if (DEEP_SLEEP_ENABLED && joinedNetwork && !(LMIC.opmode & OP_TXRXPEND)) {
         // Small delay to ensure transmission is complete
         delay(2000);  // Give time for display update
-        Serial.println(F("\nEntering deep sleep..."));
+        Serial.print(F("\nEntering deep sleep for "));
+        Serial.print(rtcCurrentInterval);
+        Serial.print(F(" seconds ("));
+        Serial.print(rtcCurrentInterval / 60);
+        Serial.println(F(" min)..."));
         Serial.flush();
-        enterDeepSleep(TX_INTERVAL_SECONDS);
+        enterDeepSleep(rtcCurrentInterval);
     }
 }
 
@@ -528,6 +556,9 @@ bool readSensorData() {
         lastSensorError = ERR_NONE;
         consecutiveFailures = 0;
         currentStatus = STATUS_CONNECTED;
+
+        // Calculate adaptive sleep interval based on change rate
+        rtcCurrentInterval = calculateAdaptiveInterval((int16_t)sensorData.distanceMm);
 
         return true;
     }
@@ -761,14 +792,16 @@ void onEvent(ev_t ev) {
             // Schedule next transmission (or enter deep sleep)
             if (DEEP_SLEEP_ENABLED) {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds (deep sleep)"));
+                Serial.print(rtcCurrentInterval);
+                Serial.print(F(" seconds ("));
+                Serial.print(rtcCurrentInterval / 60);
+                Serial.println(F(" min, adaptive)"));
                 // Deep sleep will be entered in loop() after a short delay
             } else {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds"));
-                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL_SECONDS), do_send);
+                Serial.print(rtcCurrentInterval);
+                Serial.println(F(" seconds (adaptive)"));
+                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(rtcCurrentInterval), do_send);
             }
             break;
             
@@ -852,6 +885,65 @@ void updateDisplay() {
     }
     
     u8g2.sendBuffer();
+}
+
+// ============================================================================
+// Calculate Adaptive Sleep Interval based on change rate
+// ============================================================================
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
+    // On sensor error, keep current interval unchanged
+    if (currentDistMm <= 0) {
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(rtcCurrentInterval);
+        Serial.println(F("s (kept - sensor error)"));
+        return rtcCurrentInterval;
+    }
+
+    // First valid reading - use default interval
+    if (!rtcHasPreviousReading) {
+        rtcLastDistanceMm = currentDistMm;
+        rtcHasPreviousReading = true;
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(SLEEP_INTERVAL_DEFAULT);
+        Serial.println(F("s (default - first reading)"));
+        return SLEEP_INTERVAL_DEFAULT;
+    }
+
+    // Calculate change from previous reading
+    uint16_t changeMm = abs(currentDistMm - rtcLastDistanceMm);
+    rtcLastDistanceMm = currentDistMm;
+
+    uint32_t interval;
+    const char* label;
+
+    if (changeMm <= CHANGE_THRESHOLD_VERY_SLOW) {
+        interval = SLEEP_INTERVAL_VERY_SLOW;
+        label = "very slow";
+    } else if (changeMm <= CHANGE_THRESHOLD_SLOW) {
+        interval = SLEEP_INTERVAL_SLOW;
+        label = "slow";
+    } else if (changeMm <= CHANGE_THRESHOLD_MODERATE) {
+        interval = SLEEP_INTERVAL_MODERATE;
+        label = "moderate";
+    } else if (changeMm <= CHANGE_THRESHOLD_FAST) {
+        interval = SLEEP_INTERVAL_FAST;
+        label = "fast";
+    } else {
+        interval = SLEEP_INTERVAL_RAPID;
+        label = "rapid";
+    }
+
+    Serial.print(F("Adaptive interval: "));
+    Serial.print(interval);
+    Serial.print(F("s ("));
+    Serial.print(interval / 60);
+    Serial.print(F(" min) - change: "));
+    Serial.print(changeMm);
+    Serial.print(F("mm ["));
+    Serial.print(label);
+    Serial.println(F("]"));
+
+    return interval;
 }
 
 // ============================================================================

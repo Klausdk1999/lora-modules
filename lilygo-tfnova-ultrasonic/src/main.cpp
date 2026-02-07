@@ -9,7 +9,7 @@
  * Configuration:
  * - Frequency: AU915 (Australia/Brazil)
  * - Power: 5V external battery
- * - Transmission interval: 10 seconds (rapid testing mode)
+ * - Transmission interval: Adaptive (1-30 min based on change rate)
  *
  * Wiring (T-Beam V1.2):
  *   TF-Nova (UART via Serial2):
@@ -53,10 +53,27 @@
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true
-#define TX_INTERVAL_SECONDS     10      // 10 seconds between transmissions (rapid testing mode)
-#define NUM_READINGS_AVG        5       // Number of readings to average
-#define READING_DELAY_MS        100     // Delay between readings
+#define NUM_READINGS_AVG        10      // Number of readings per sensor for averaging
+#define READING_DELAY_MS        100     // Delay between readings (ms)
 #define DEEP_SLEEP_ENABLED      true
+#define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% from median
+
+// ============================================================================
+// Adaptive Sleep Configuration
+// ============================================================================
+#define SLEEP_INTERVAL_VERY_SLOW    1800    // 30 min - very slow change rate
+#define SLEEP_INTERVAL_SLOW         1200    // 20 min - slow change
+#define SLEEP_INTERVAL_MODERATE     600     // 10 min - moderate change
+#define SLEEP_INTERVAL_FAST         300     // 5 min - fast change
+#define SLEEP_INTERVAL_RAPID        60      // 1 min - rapid change
+#define SLEEP_INTERVAL_DEFAULT      60      // 1 min - default (first boot, then adapts)
+
+// Change rate thresholds (mm between consecutive readings)
+#define CHANGE_THRESHOLD_VERY_SLOW  2       // <= 2mm  -> 30 min
+#define CHANGE_THRESHOLD_SLOW       5       // <= 5mm  -> 20 min
+#define CHANGE_THRESHOLD_MODERATE   15      // <= 15mm -> 10 min
+#define CHANGE_THRESHOLD_FAST       50      // <= 50mm -> 5 min
+                                            // > 50mm  -> 1 min
 
 // ============================================================================
 // Sensor Reliability Configuration
@@ -165,6 +182,9 @@ struct __attribute__((packed)) LMICSessionData {
 RTC_DATA_ATTR LMICSessionData rtcSession;
 RTC_DATA_ATTR uint32_t rtcPacketCount = 0;
 RTC_DATA_ATTR uint8_t rtcTxFailCount = 0;
+RTC_DATA_ATTR int16_t rtcLastDistanceMm = 0;
+RTC_DATA_ATTR bool rtcHasPreviousReading = false;
+RTC_DATA_ATTR uint32_t rtcCurrentInterval = SLEEP_INTERVAL_DEFAULT;
 
 // ============================================================================
 // Sensor Data Structure (for LoRa transmission)
@@ -199,6 +219,8 @@ float calculateMedian(float readings[], uint8_t count);
 int16_t readTFNovaAverage();
 int16_t readUltrasonicAverage();
 bool readDHTSensor(float& temperature, float& humidity);
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm);
+float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct);
 void saveSession();
 bool restoreSession();
 void clearSession();
@@ -363,15 +385,17 @@ void loop() {
     if (DEEP_SLEEP_ENABLED && joinedNetwork && transmissionCompleted && !(LMIC.opmode & OP_TXRXPEND)) {
         delay(2000);
         Serial.print(F("\nEntering deep sleep for "));
-        Serial.print(TX_INTERVAL_SECONDS);
-        Serial.println(F(" seconds..."));
+        Serial.print(rtcCurrentInterval);
+        Serial.print(F(" seconds ("));
+        Serial.print(rtcCurrentInterval / 60);
+        Serial.println(F(" min)..."));
         Serial.flush();
-        enterDeepSleep(TX_INTERVAL_SECONDS);
+        enterDeepSleep(rtcCurrentInterval);
     }
 }
 
 // ============================================================================
-// Read TF-Nova - Single Reading (returns -1 on error)
+// Read TF-Nova with Averaging (10 readings, median + outlier filter)
 // ============================================================================
 int16_t readTFNovaAverage() {
     if (!tfNovaInitialized) {
@@ -389,28 +413,12 @@ int16_t readTFNovaAverage() {
         }
     }
 
-    // Single reading mode for testing
-    Serial.println(F("Reading TF-Nova (single reading)..."));
-
-    SensorReading reading = tfNova.read();
-
-    if (reading.valid && reading.distance_cm > 0) {
-        Serial.print(F("  Distance: "));
-        Serial.print(reading.distance_cm);
-        Serial.print(F(" cm, sig: "));
-        Serial.println(reading.signal_strength);
-
-        return (int16_t)(reading.distance_cm * 10);  // Return in mm
-    } else {
-        Serial.println(F("  ERROR: Invalid reading"));
-        return SENSOR_ERROR_VALUE;
-    }
-
-    /* AVERAGING CODE - Uncomment to restore averaging
     float readings[NUM_READINGS_AVG];
     uint8_t validCount = 0;
 
-    Serial.println(F("Reading TF-Nova (5 samples)..."));
+    Serial.print(F("Reading TF-Nova ("));
+    Serial.print(NUM_READINGS_AVG);
+    Serial.println(F(" samples)..."));
 
     for (int i = 0; i < NUM_READINGS_AVG; i++) {
         SensorReading reading = tfNova.read();
@@ -437,47 +445,43 @@ int16_t readTFNovaAverage() {
         return SENSOR_ERROR_VALUE;
     }
 
+    // Calculate median (robust to outliers)
     float median = calculateMedian(readings, validCount);
-    Serial.print(F("  TF-Nova median: "));
+    Serial.print(F("  Median: "));
     Serial.print(median);
     Serial.println(F(" cm"));
 
-    return (int16_t)(median * 10);  // Return in mm
-    */
+    // Filter outliers based on deviation from median
+    uint8_t filteredCount = validCount;
+    float avgDistance = filterOutliers(readings, filteredCount, median, OUTLIER_THRESHOLD_PCT);
+
+    if (filteredCount < validCount / 2) {
+        Serial.println(F("  Warning: Too many outliers, using median"));
+        avgDistance = median;
+    } else {
+        Serial.print(F("  Outliers removed: "));
+        Serial.print(validCount - filteredCount);
+        Serial.print(F("/"));
+        Serial.println(validCount);
+    }
+
+    Serial.print(F("  TF-Nova result: "));
+    Serial.print(avgDistance);
+    Serial.println(F(" cm"));
+
+    return (int16_t)(avgDistance * 10);  // Return in mm
 }
 
 // ============================================================================
-// Read Ultrasonic - Single Reading (returns -1 on error)
+// Read Ultrasonic with Averaging (10 readings, median + outlier filter)
 // ============================================================================
 int16_t readUltrasonicAverage() {
-    // Single reading mode for testing
-    Serial.println(F("Reading AJ-SR04M Ultrasonic (single reading)..."));
-
-    float dist = ultrasonicSensor.readDistanceCm();
-
-    if (dist > 0 && dist >= ultrasonicSensor.getMinDistance() && dist <= ultrasonicSensor.getMaxDistance()) {
-        Serial.print(F("  Distance: "));
-        Serial.print(dist);
-        Serial.println(F(" cm"));
-
-        return (int16_t)(dist * 10);  // Return in mm
-    } else if (dist < 0) {
-        Serial.println(F("  ERROR: TIMEOUT"));
-    } else if (dist == 0) {
-        Serial.println(F("  ERROR: ZERO (too close?)"));
-    } else {
-        Serial.print(F("  ERROR: "));
-        Serial.print(dist);
-        Serial.println(F(" cm (out of range)"));
-    }
-
-    return SENSOR_ERROR_VALUE;
-
-    /* AVERAGING CODE - Uncomment to restore averaging
     float readings[NUM_READINGS_AVG];
     uint8_t validCount = 0;
 
-    Serial.println(F("Reading AJ-SR04M Ultrasonic (5 samples)..."));
+    Serial.print(F("Reading AJ-SR04M Ultrasonic ("));
+    Serial.print(NUM_READINGS_AVG);
+    Serial.println(F(" samples)..."));
 
     for (int i = 0; i < NUM_READINGS_AVG; i++) {
         float dist = ultrasonicSensor.readDistanceCm();
@@ -508,13 +512,31 @@ int16_t readUltrasonicAverage() {
         return SENSOR_ERROR_VALUE;
     }
 
+    // Calculate median (robust to outliers)
     float median = calculateMedian(readings, validCount);
-    Serial.print(F("  Ultrasonic median: "));
+    Serial.print(F("  Median: "));
     Serial.print(median);
     Serial.println(F(" cm"));
 
-    return (int16_t)(median * 10);  // Return in mm
-    */
+    // Filter outliers based on deviation from median
+    uint8_t filteredCount = validCount;
+    float avgDistance = filterOutliers(readings, filteredCount, median, OUTLIER_THRESHOLD_PCT);
+
+    if (filteredCount < validCount / 2) {
+        Serial.println(F("  Warning: Too many outliers, using median"));
+        avgDistance = median;
+    } else {
+        Serial.print(F("  Outliers removed: "));
+        Serial.print(validCount - filteredCount);
+        Serial.print(F("/"));
+        Serial.println(validCount);
+    }
+
+    Serial.print(F("  Ultrasonic result: "));
+    Serial.print(avgDistance);
+    Serial.println(F(" cm"));
+
+    return (int16_t)(avgDistance * 10);  // Return in mm
 }
 
 // ============================================================================
@@ -595,6 +617,10 @@ bool readAllSensors() {
         sensorData.sensorFlags |= 0x80;
     }
 
+    // Calculate adaptive sleep interval (prefer TF-Nova, fallback to ultrasonic)
+    int16_t bestDistMm = (tfNovaDist > 0) ? tfNovaDist : ultrasonicDist;
+    rtcCurrentInterval = calculateAdaptiveInterval(bestDistMm);
+
     // Battery readings
     sensorData.batteryPercent = getBatteryPercent();
     sensorData.batteryMv = getBatteryVoltage();
@@ -645,6 +671,9 @@ bool readAllSensors() {
     Serial.println(F(" mV)"));
     Serial.print(F("Sensor flags: 0x"));
     Serial.println(sensorData.sensorFlags, HEX);
+    Serial.print(F("Next interval: "));
+    Serial.print(rtcCurrentInterval / 60);
+    Serial.println(F(" min (adaptive)"));
     Serial.println(F("========================================"));
 
     return anyDistanceSuccess || dhtSuccess;
@@ -677,6 +706,91 @@ float calculateMedian(float readings[], uint8_t count) {
     } else {
         return sorted[count / 2];
     }
+}
+
+// ============================================================================
+// Filter Outliers (based on deviation from median)
+// ============================================================================
+float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct) {
+    float sum = 0;
+    uint8_t filteredIdx = 0;
+
+    float threshold = median * (thresholdPct / 100.0f);
+
+    for (uint8_t i = 0; i < validCount; i++) {
+        float deviation = abs(readings[i] - median);
+        if (deviation <= threshold) {
+            sum += readings[i];
+            filteredIdx++;
+        }
+    }
+
+    validCount = filteredIdx;
+
+    if (validCount == 0) {
+        return median;
+    }
+
+    return sum / validCount;
+}
+
+// ============================================================================
+// Calculate Adaptive Sleep Interval based on change rate
+// ============================================================================
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
+    // On sensor error, keep current interval unchanged
+    if (currentDistMm <= 0) {
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(rtcCurrentInterval);
+        Serial.println(F("s (kept - sensor error)"));
+        return rtcCurrentInterval;
+    }
+
+    // First valid reading - use default interval
+    if (!rtcHasPreviousReading) {
+        rtcLastDistanceMm = currentDistMm;
+        rtcHasPreviousReading = true;
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(SLEEP_INTERVAL_DEFAULT);
+        Serial.println(F("s (default - first reading)"));
+        return SLEEP_INTERVAL_DEFAULT;
+    }
+
+    // Calculate change from previous reading
+    uint16_t changeMm = abs(currentDistMm - rtcLastDistanceMm);
+    rtcLastDistanceMm = currentDistMm;
+
+    uint32_t interval;
+    const char* label;
+
+    if (changeMm <= CHANGE_THRESHOLD_VERY_SLOW) {
+        interval = SLEEP_INTERVAL_VERY_SLOW;
+        label = "very slow";
+    } else if (changeMm <= CHANGE_THRESHOLD_SLOW) {
+        interval = SLEEP_INTERVAL_SLOW;
+        label = "slow";
+    } else if (changeMm <= CHANGE_THRESHOLD_MODERATE) {
+        interval = SLEEP_INTERVAL_MODERATE;
+        label = "moderate";
+    } else if (changeMm <= CHANGE_THRESHOLD_FAST) {
+        interval = SLEEP_INTERVAL_FAST;
+        label = "fast";
+    } else {
+        interval = SLEEP_INTERVAL_RAPID;
+        label = "rapid";
+    }
+
+    Serial.print(F("Adaptive interval: "));
+    Serial.print(interval);
+    Serial.print(F("s ("));
+    Serial.print(interval / 60);
+    Serial.print(F(" min) - change: "));
+    Serial.print(changeMm);
+    Serial.print(F("mm ["));
+    Serial.print(label);
+    Serial.println(F("]"));
+
+    return interval;
 }
 
 // ============================================================================
@@ -926,10 +1040,12 @@ void onEvent(ev_t ev) {
 
             if (DEEP_SLEEP_ENABLED) {
                 Serial.print(F("Next transmission in "));
-                Serial.print(TX_INTERVAL_SECONDS);
-                Serial.println(F(" seconds (deep sleep)"));
+                Serial.print(rtcCurrentInterval);
+                Serial.print(F(" seconds ("));
+                Serial.print(rtcCurrentInterval / 60);
+                Serial.println(F(" min, adaptive)"));
             } else {
-                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL_SECONDS), do_send);
+                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(rtcCurrentInterval), do_send);
             }
             break;
 

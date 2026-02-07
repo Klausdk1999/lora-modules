@@ -24,7 +24,11 @@
       "Bash(pio device list:*)",
       "Bash(powershell -Command \"Get-PnpDevice -Class Ports -Status OK | Select-Object FriendlyName, InstanceId\")",
       "Bash(ls:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(platformio run:*)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:www.sciencedirect.com)",
+      "WebFetch(domain:maxbotix.com)"
     ]
   }
 }
