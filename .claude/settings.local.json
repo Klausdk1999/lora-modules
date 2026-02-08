@@ -28,7 +28,8 @@
       "Bash(platformio run:*)",
       "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
       "WebFetch(domain:www.sciencedirect.com)",
-      "WebFetch(domain:maxbotix.com)"
+      "WebFetch(domain:maxbotix.com)",
+      "Bash(python:*)"
     ]
   }
 }

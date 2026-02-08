@@ -61,12 +61,13 @@
 // ============================================================================
 // Adaptive Sleep Configuration
 // ============================================================================
-#define SLEEP_INTERVAL_VERY_SLOW    1800    // 30 min - very slow change rate
-#define SLEEP_INTERVAL_SLOW         1200    // 20 min - slow change
-#define SLEEP_INTERVAL_MODERATE     600     // 10 min - moderate change
-#define SLEEP_INTERVAL_FAST         300     // 5 min - fast change
-#define SLEEP_INTERVAL_RAPID        60      // 1 min - rapid change
-#define SLEEP_INTERVAL_DEFAULT      60      // 1 min - default (first boot, then adapts)
+#define SLEEP_INTERVAL_VERY_SLOW    300     // 5 min - very slow change rate
+#define SLEEP_INTERVAL_SLOW         180     // 3 min - slow change
+#define SLEEP_INTERVAL_MODERATE     120     // 2 min - moderate change
+#define SLEEP_INTERVAL_FAST         60      // 1 min - fast change
+#define SLEEP_INTERVAL_RAPID        30      // 30 sec - rapid change
+#define SLEEP_INTERVAL_DEFAULT      120     // 2 min - default (first boot, then adapts)
+#define NUM_INTERVAL_TIERS          5
 
 // Change rate thresholds (mm between consecutive readings)
 #define CHANGE_THRESHOLD_VERY_SLOW  2       // <= 2mm  -> 30 min
@@ -617,9 +618,8 @@ bool readAllSensors() {
         sensorData.sensorFlags |= 0x80;
     }
 
-    // Calculate adaptive sleep interval (prefer TF-Nova, fallback to ultrasonic)
-    int16_t bestDistMm = (tfNovaDist > 0) ? tfNovaDist : ultrasonicDist;
-    rtcCurrentInterval = calculateAdaptiveInterval(bestDistMm);
+    // Calculate adaptive sleep interval based on LiDAR reading only
+    rtcCurrentInterval = calculateAdaptiveInterval(tfNovaDist);
 
     // Battery readings
     sensorData.batteryPercent = getBatteryPercent();
@@ -738,6 +738,18 @@ float filterOutliers(float readings[], uint8_t& validCount, float median, float 
 // Calculate Adaptive Sleep Interval based on change rate
 // ============================================================================
 uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
+    // Interval tiers ordered from fastest to slowest
+    static const uint32_t tiers[NUM_INTERVAL_TIERS] = {
+        SLEEP_INTERVAL_RAPID,      // 0: 1 min
+        SLEEP_INTERVAL_FAST,       // 1: 5 min
+        SLEEP_INTERVAL_MODERATE,   // 2: 10 min
+        SLEEP_INTERVAL_SLOW,       // 3: 15 min
+        SLEEP_INTERVAL_VERY_SLOW   // 4: 20 min
+    };
+    static const char* tierLabels[NUM_INTERVAL_TIERS] = {
+        "rapid", "fast", "moderate", "slow", "very slow"
+    };
+
     // On sensor error, keep current interval unchanged
     if (currentDistMm <= 0) {
         Serial.print(F("Adaptive interval: "));
@@ -760,25 +772,40 @@ uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
     uint16_t changeMm = abs(currentDistMm - rtcLastDistanceMm);
     rtcLastDistanceMm = currentDistMm;
 
-    uint32_t interval;
-    const char* label;
-
+    // Determine target tier based on change rate
+    int8_t targetTier;
     if (changeMm <= CHANGE_THRESHOLD_VERY_SLOW) {
-        interval = SLEEP_INTERVAL_VERY_SLOW;
-        label = "very slow";
+        targetTier = 4;  // very slow -> 20 min
     } else if (changeMm <= CHANGE_THRESHOLD_SLOW) {
-        interval = SLEEP_INTERVAL_SLOW;
-        label = "slow";
+        targetTier = 3;  // slow -> 15 min
     } else if (changeMm <= CHANGE_THRESHOLD_MODERATE) {
-        interval = SLEEP_INTERVAL_MODERATE;
-        label = "moderate";
+        targetTier = 2;  // moderate -> 10 min
     } else if (changeMm <= CHANGE_THRESHOLD_FAST) {
-        interval = SLEEP_INTERVAL_FAST;
-        label = "fast";
+        targetTier = 1;  // fast -> 5 min
     } else {
-        interval = SLEEP_INTERVAL_RAPID;
-        label = "rapid";
+        targetTier = 0;  // rapid -> 1 min
     }
+
+    // Find current tier index
+    int8_t currentTier = 2;  // default to moderate
+    for (int8_t i = 0; i < NUM_INTERVAL_TIERS; i++) {
+        if (rtcCurrentInterval == tiers[i]) {
+            currentTier = i;
+            break;
+        }
+    }
+
+    // Gradual stepping: only move one tier at a time toward the target
+    int8_t newTier;
+    if (targetTier > currentTier) {
+        newTier = currentTier + 1;  // step slower
+    } else if (targetTier < currentTier) {
+        newTier = currentTier - 1;  // step faster
+    } else {
+        newTier = currentTier;      // stay
+    }
+
+    uint32_t interval = tiers[newTier];
 
     Serial.print(F("Adaptive interval: "));
     Serial.print(interval);
@@ -787,7 +814,11 @@ uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
     Serial.print(F(" min) - change: "));
     Serial.print(changeMm);
     Serial.print(F("mm ["));
-    Serial.print(label);
+    Serial.print(tierLabels[newTier]);
+    if (newTier != targetTier) {
+        Serial.print(F(" -> "));
+        Serial.print(tierLabels[targetTier]);
+    }
     Serial.println(F("]"));
 
     return interval;

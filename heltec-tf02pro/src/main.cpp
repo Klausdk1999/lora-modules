@@ -8,7 +8,7 @@
  * Configuration:
  * - Frequency: AU915 (Australia/Brazil)
  * - Power: 5V external battery
- * - Transmission interval: 10 seconds (rapid testing mode)
+ * - Transmission interval: Adaptive (1-30 min based on change rate)
  * - Display: OLED shows status, distance, and signal quality
  *
  * Wiring (Heltec WiFi LoRa 32 V2):
@@ -21,7 +21,7 @@
  *   DHT11:
  *     VCC  -> 3.3V or 5V
  *     GND  -> GND
- *     DATA -> GPIO 27
+ *     DATA -> GPIO 25
  *
  * Author: Klaus Dieter Kupper
  * Project: Comparative Evaluation of Low-Cost IoT Sensors for River Level Monitoring
@@ -38,37 +38,32 @@
 // Include TF02-Pro sensor library
 #include "TF02Pro/TF02Pro.h"
 
-// Include filtering and adaptive sampling libraries
-#include "filters/SensorFilters.h"
-#include "filters/MovingAverage.h"
-#include "filters/AdaptiveSampling.h"
-
 // ============================================================================
 // Configuration Options
 // ============================================================================
 #define ENABLE_SERIAL_DEBUG     true
-#define NUM_READINGS_AVG        5       // Number of readings to average
+#define NUM_READINGS_AVG        10      // Number of readings per sensor for averaging
 #define READING_DELAY_MS        150     // Delay between readings (TF02-Pro at 10Hz = 100ms min)
 #define DEEP_SLEEP_ENABLED      true
+#define OUTLIER_THRESHOLD_PCT   20.0f   // Outlier threshold: reject readings >20% from median
 
 // ============================================================================
-// Adaptive Sampling Configuration
+// Adaptive Sleep Configuration
 // ============================================================================
-// Based on Ragnoli et al. (2020) and thesis requirements:
-// "If the river rises >5cm/min, transmit every 1 minute. If stable, transmit every 30 minutes"
-#define TX_INTERVAL_MIN_SEC     30      // Minimum interval: 30 seconds (rapid change mode)
-#define TX_INTERVAL_NORMAL_SEC  120     // Normal interval: 2 minutes (standard operation)
-#define TX_INTERVAL_MAX_SEC     300     // Maximum interval: 5 minutes (stable/low battery)
-#define TX_INTERVAL_EMERGENCY   60      // Emergency interval: 1 minute (rapid change)
+#define SLEEP_INTERVAL_VERY_SLOW    300     // 5 min - very slow change rate
+#define SLEEP_INTERVAL_SLOW         180     // 3 min - slow change
+#define SLEEP_INTERVAL_MODERATE     120     // 2 min - moderate change
+#define SLEEP_INTERVAL_FAST         60      // 1 min - fast change
+#define SLEEP_INTERVAL_RAPID        30      // 30 sec - rapid change
+#define SLEEP_INTERVAL_DEFAULT      120     // 2 min - default (first boot, then adapts)
+#define NUM_INTERVAL_TIERS          5
 
-// Thresholds for adaptive behavior
-#define CHANGE_THRESHOLD_CM     2.0f    // Level change threshold for faster sampling
-#define RAPID_CHANGE_CM         5.0f    // Rapid change threshold (triggers emergency mode)
-#define CRITICAL_LEVEL_CM       50.0f   // Critical river level threshold
-#define BATTERY_LOW_PERCENT     20      // Low battery threshold
-
-// River level calculation
-#define DEFAULT_SENSOR_HEIGHT_CM 400.0f // Sensor height above riverbed (calibrate on install)
+// Change rate thresholds (mm between consecutive readings)
+#define CHANGE_THRESHOLD_VERY_SLOW  2       // <= 2mm  -> 30 min
+#define CHANGE_THRESHOLD_SLOW       5       // <= 5mm  -> 20 min
+#define CHANGE_THRESHOLD_MODERATE   15      // <= 15mm -> 10 min
+#define CHANGE_THRESHOLD_FAST       50      // <= 50mm -> 5 min
+                                            // > 50mm  -> 1 min
 
 // ============================================================================
 // Sensor Reliability Configuration
@@ -115,8 +110,6 @@ const lmic_pinmap lmic_pins = {
 #define TF02_TX_PIN     17      // GPIO 17 sends to TF02-Pro RX
 
 // DHT11 Temperature/Humidity sensor
-// NOTE: GPIO 27 is SPI MOSI on Heltec V2 - DO NOT USE!
-// Using GPIO 25 instead (safe, no conflicts)
 #define DHT_PIN         25
 #define DHT_TYPE        DHT11
 
@@ -153,30 +146,31 @@ bool transmissionCompleted = false;
 // ============================================================================
 // Session Persistence (RTC Memory - survives deep sleep)
 // ============================================================================
-// Magic number to verify RTC data is valid
 #define RTC_DATA_MAGIC 0xCAFE1234
 
-// Structure to save LMIC session state
 struct __attribute__((packed)) LMICSessionData {
-    uint32_t magic;             // Magic number to verify data
-    u4_t netid;                 // Network ID
-    devaddr_t devaddr;          // Device address
-    u1_t nwkKey[16];            // Network session key
-    u1_t artKey[16];            // Application session key
-    u4_t seqnoUp;               // Uplink frame counter
-    u4_t seqnoDn;               // Downlink frame counter
-    u1_t dn2Dr;                 // RX2 data rate
-    s1_t adrTxPow;              // ADR TX power
-    u4_t rxDelay;               // RX1 delay
+    uint32_t magic;
+    u4_t netid;
+    devaddr_t devaddr;
+    u1_t nwkKey[16];
+    u1_t artKey[16];
+    u4_t seqnoUp;
+    u4_t seqnoDn;
+    u1_t dn2Dr;
+    s1_t adrTxPow;
+    u4_t rxDelay;
 };
 
-// Store in RTC memory (survives deep sleep, lost on power cycle)
 RTC_DATA_ATTR LMICSessionData rtcSession;
 RTC_DATA_ATTR uint32_t rtcPacketCount = 0;
-RTC_DATA_ATTR uint8_t rtcTxFailCount = 0;  // Track consecutive TX failures
+RTC_DATA_ATTR uint8_t rtcTxFailCount = 0;
 
-// Max failures before forcing rejoin (handles gateway reset, session expiry)
 #define MAX_TX_FAILURES 3
+
+// Adaptive sleep state (RTC Memory)
+RTC_DATA_ATTR int16_t rtcLastDistanceMm = 0;
+RTC_DATA_ATTR bool rtcHasPreviousReading = false;
+RTC_DATA_ATTR uint32_t rtcCurrentInterval = SLEEP_INTERVAL_DEFAULT;
 
 // Display status
 enum Status {
@@ -190,34 +184,20 @@ Status currentStatus = STATUS_INIT;
 float lastDistance = 0;
 
 // ============================================================================
-// Sensor Data Structure (for LoRa transmission)
+// Sensor Data Structure (for LoRa transmission) - 11 bytes
 // ============================================================================
-// Extended payload with filtered values - Total size: 16 bytes
 struct __attribute__((packed)) SensorPayload {
     uint8_t sensorType;         // 1 = TF02-Pro, 0xFF = error
-    uint16_t rawDistanceMm;     // Raw distance in mm (0xFFFF = error)
-    uint16_t maDistanceMm;      // Moving average distance in mm
-    uint16_t kalmanDistanceMm;  // Kalman filtered distance in mm
-    int16_t signalStrength;     // Signal strength (flux)
+    uint16_t distanceMm;        // Filtered distance in mm (0xFFFF = error)
+    int16_t signalStrength;     // LiDAR signal strength
     int8_t sensorTemp;          // TF02-Pro internal temperature
     int8_t ambientTemp;         // DHT11 temperature (Celsius)
     uint8_t humidity;           // DHT11 humidity (%)
     uint8_t batteryPercent;     // Battery level (0-100)
-    uint8_t flags;              // Status flags: bit0=rapid_change, bit1=critical, bit2=batt_low, bit4=kalman_init
+    uint8_t readingCount;       // Number of valid readings in average
 };
 
 SensorPayload sensorData;
-
-// ============================================================================
-// Filtering and Adaptive Sampling Instances
-// ============================================================================
-SensorFilterChain<5> lidarFilterChain(KALMAN_LIDAR_NOISE, KALMAN_PROCESS_NOISE_NORMAL);
-AdaptiveSampler adaptiveSampler;
-
-// Adaptive sampling state (stored in RTC memory to survive deep sleep)
-RTC_DATA_ATTR float lastDistanceCm = 0.0f;
-RTC_DATA_ATTR uint32_t currentIntervalSec = TX_INTERVAL_NORMAL_SEC;
-RTC_DATA_ATTR float sensorHeightCm = DEFAULT_SENSOR_HEIGHT_CM;
 
 // ============================================================================
 // Forward Declarations
@@ -229,13 +209,13 @@ uint8_t getBatteryPercent();
 void updateDisplay();
 void enterDeepSleep(uint32_t sleepSeconds);
 float calculateMedian(float readings[], uint8_t count);
-FilteredReading readLidarFiltered(int16_t& sensorTemp);
+float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct);
+int16_t readTF02ProAverage(int16_t& avgSignalStrength, int8_t& avgSensorTemp);
 bool readDHTSensor(float& temperature, float& humidity);
 void saveSession();
 bool restoreSession();
 void clearSession();
-uint32_t calculateAdaptiveInterval(float currentDistCm, float riverLevelCm, uint8_t batteryPct);
-float calculateRiverLevel(float distanceCm);
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm);
 
 // ============================================================================
 // Setup
@@ -303,7 +283,6 @@ void setup() {
         lidarInitialized = true;
         Serial.println(F("  TF02-Pro initialized"));
 
-        // Set lower frame rate for power saving
         lidarSensor.setFrameRate(10);
 
         // Test reading
@@ -363,7 +342,6 @@ void setup() {
         currentStatus = STATUS_JOINING;
         updateDisplay();
 
-        // Start join process
         do_send(&sendjob);
         Serial.println(F("\nSetup complete. Joining LoRaWAN network..."));
     }
@@ -375,7 +353,6 @@ void setup() {
 void loop() {
     os_runloop_once();
 
-    // Yield to prevent watchdog issues
     yield();
 
     // Update display periodically
@@ -386,25 +363,22 @@ void loop() {
     }
 
     // Enter deep sleep after transmission
-    // IMPORTANT: Wait for TX to complete and RX windows to close
     if (DEEP_SLEEP_ENABLED && joinedNetwork && transmissionCompleted && !(LMIC.opmode & OP_TXRXPEND)) {
-        // Additional delay to ensure all LoRa operations are complete
         delay(2000);
         Serial.print(F("\nEntering deep sleep for "));
-        Serial.print(currentIntervalSec);
-        Serial.println(F(" seconds (adaptive)..."));
+        Serial.print(rtcCurrentInterval);
+        Serial.print(F(" seconds ("));
+        Serial.print(rtcCurrentInterval / 60);
+        Serial.println(F(" min)..."));
         Serial.flush();
-        enterDeepSleep(currentIntervalSec);
+        enterDeepSleep(rtcCurrentInterval);
     }
 }
 
 // ============================================================================
-// Read LiDAR with Moving Average and Kalman Filtering
+// Read TF02-Pro with 10-Reading Averaging + Median + Outlier Filtering
 // ============================================================================
-FilteredReading readLidarFiltered(int16_t& avgSensorTemp) {
-    FilteredReading result = {};
-    result.valid = false;
-
+int16_t readTF02ProAverage(int16_t& avgSignalStrength, int8_t& avgSensorTemp) {
     if (!lidarInitialized) {
         Serial.println(F("TF02-Pro not initialized, attempting retry..."));
         delay(500);
@@ -416,43 +390,84 @@ FilteredReading readLidarFiltered(int16_t& avgSensorTemp) {
             Serial.println(F("  TF02-Pro reinitialized successfully"));
         } else {
             Serial.println(F("  TF02-Pro still not available"));
-            return result;
+            return SENSOR_ERROR_VALUE;
         }
     }
 
-    Serial.println(F("Reading TF02-Pro (single reading with filtering)..."));
+    float readings[NUM_READINGS_AVG];
+    int32_t sigSum = 0;
+    int32_t tempSum = 0;
+    uint8_t validCount = 0;
 
-    SensorReading reading = lidarSensor.read();
+    Serial.print(F("Reading TF02-Pro ("));
+    Serial.print(NUM_READINGS_AVG);
+    Serial.println(F(" samples)..."));
 
-    if (reading.valid && reading.distance_cm > 0) {
-        avgSensorTemp = reading.temperature;
+    for (int i = 0; i < NUM_READINGS_AVG; i++) {
+        SensorReading reading = lidarSensor.read();
 
-        // Process through filter chain (moving average + Kalman)
-        result = lidarFilterChain.process(
-            reading.distance_cm,
-            reading.signal_strength,
-            (int8_t)reading.temperature
-        );
+        Serial.print(F("  ["));
+        Serial.print(i + 1);
+        Serial.print(F("] "));
 
-        Serial.print(F("  Raw: "));
-        Serial.print(reading.distance_cm);
-        Serial.print(F(" cm, MA: "));
-        Serial.print(result.movingAverage);
-        Serial.print(F(" cm, Kalman: "));
-        Serial.print(result.kalmanFiltered);
-        Serial.print(F(" cm"));
-        Serial.print(F(", sig: "));
-        Serial.print(reading.signal_strength);
-        Serial.print(F(", temp: "));
-        Serial.print(reading.temperature);
-        Serial.println(F(" C"));
+        if (reading.valid && reading.distance_cm > 0) {
+            readings[validCount] = reading.distance_cm;
+            sigSum += reading.signal_strength;
+            tempSum += reading.temperature;
+            validCount++;
+            Serial.print(reading.distance_cm);
+            Serial.print(F(" cm, sig: "));
+            Serial.print(reading.signal_strength);
+            Serial.print(F(", temp: "));
+            Serial.print(reading.temperature);
+            Serial.println(F(" C"));
+        } else {
+            Serial.println(F("INVALID"));
+        }
 
-        lastDistance = result.kalmanFiltered;  // Use Kalman for display
-    } else {
-        Serial.println(F("  ERROR: Invalid reading"));
+        delay(READING_DELAY_MS);
     }
 
-    return result;
+    if (validCount < MIN_VALID_READINGS) {
+        Serial.println(F("  ERROR: Insufficient valid TF02-Pro readings"));
+        return SENSOR_ERROR_VALUE;
+    }
+
+    // Calculate averages for signal strength and temperature
+    avgSignalStrength = (int16_t)(sigSum / validCount);
+    avgSensorTemp = (int8_t)(tempSum / validCount);
+
+    // Calculate median (robust to outliers)
+    float median = calculateMedian(readings, validCount);
+    Serial.print(F("  Median: "));
+    Serial.print(median);
+    Serial.println(F(" cm"));
+
+    // Filter outliers based on deviation from median
+    uint8_t filteredCount = validCount;
+    float avgDistance = filterOutliers(readings, filteredCount, median, OUTLIER_THRESHOLD_PCT);
+
+    if (filteredCount < validCount / 2) {
+        Serial.println(F("  Warning: Too many outliers, using median"));
+        avgDistance = median;
+    } else {
+        Serial.print(F("  Outliers removed: "));
+        Serial.print(validCount - filteredCount);
+        Serial.print(F("/"));
+        Serial.println(validCount);
+    }
+
+    lastDistance = avgDistance;
+
+    Serial.print(F("  TF02-Pro result: "));
+    Serial.print(avgDistance);
+    Serial.print(F(" cm ("));
+    Serial.print(filteredCount);
+    Serial.println(F(" valid readings)"));
+
+    sensorData.readingCount = filteredCount;
+
+    return (int16_t)(avgDistance * 10);  // Return in mm
 }
 
 // ============================================================================
@@ -493,7 +508,7 @@ bool readDHTSensor(float& temperature, float& humidity) {
 }
 
 // ============================================================================
-// Read All Sensors with Filtering and Adaptive Sampling
+// Read All Sensors
 // ============================================================================
 bool readAllSensors() {
     Serial.println(F("\n========================================"));
@@ -504,51 +519,27 @@ bool readAllSensors() {
     float ambientTemp, humidity;
     bool dhtSuccess = readDHTSensor(ambientTemp, humidity);
 
-    // Read TF02-Pro with filtering
-    int16_t sensorTemp = 0;
-    FilteredReading filteredReading = readLidarFiltered(sensorTemp);
-
-    // Calculate river level
-    float riverLevelCm = 0.0f;
-    float distanceForCalc = 0.0f;
-    if (filteredReading.valid) {
-        distanceForCalc = filteredReading.kalmanFiltered;
-        riverLevelCm = calculateRiverLevel(distanceForCalc);
-    }
+    // Read TF02-Pro with averaging
+    int16_t signalStrength = 0;
+    int8_t sensorTemp = 0;
+    int16_t distanceMm = readTF02ProAverage(signalStrength, sensorTemp);
+    bool lidarSuccess = (distanceMm != SENSOR_ERROR_VALUE);
 
     // Get battery percentage
     uint8_t batteryPct = getBatteryPercent();
 
-    // Calculate adaptive interval for next transmission
-    currentIntervalSec = calculateAdaptiveInterval(distanceForCalc, riverLevelCm, batteryPct);
-
-    // Build payload with filtered values
-    if (filteredReading.valid) {
+    // Build payload
+    if (lidarSuccess) {
         sensorData.sensorType = 1;  // TF02-Pro
-        sensorData.rawDistanceMm = (uint16_t)(filteredReading.rawValue * 10.0f);
-        sensorData.maDistanceMm = (uint16_t)(filteredReading.movingAverage * 10.0f);
-        sensorData.kalmanDistanceMm = (uint16_t)(filteredReading.kalmanFiltered * 10.0f);
-        sensorData.signalStrength = filteredReading.signalStrength;
-        sensorData.sensorTemp = (int8_t)sensorTemp;
-
-        // Build status flags
-        float changeFromLast = abs(distanceForCalc - lastDistanceCm);
-        sensorData.flags = 0;
-        if (changeFromLast >= RAPID_CHANGE_CM) sensorData.flags |= 0x01;  // Rapid change
-        if (riverLevelCm >= CRITICAL_LEVEL_CM) sensorData.flags |= 0x02;  // Critical level
-        if (batteryPct < BATTERY_LOW_PERCENT) sensorData.flags |= 0x04;   // Battery low
-        if (lidarFilterChain.getKalmanFilter().isInitialized()) sensorData.flags |= 0x10;  // Kalman init
-
-        // Update last distance for next comparison
-        lastDistanceCm = distanceForCalc;
+        sensorData.distanceMm = (uint16_t)distanceMm;
+        sensorData.signalStrength = signalStrength;
+        sensorData.sensorTemp = sensorTemp;
     } else {
         sensorData.sensorType = 0xFF;
-        sensorData.rawDistanceMm = 0xFFFF;
-        sensorData.maDistanceMm = 0xFFFF;
-        sensorData.kalmanDistanceMm = 0xFFFF;
+        sensorData.distanceMm = 0xFFFF;
         sensorData.signalStrength = 0;
-        sensorData.sensorTemp = (int8_t)sensorTemp;
-        sensorData.flags = 0x08;  // Sensor error
+        sensorData.sensorTemp = 0;
+        sensorData.readingCount = 0;
     }
 
     if (dhtSuccess) {
@@ -561,134 +552,143 @@ bool readAllSensors() {
 
     sensorData.batteryPercent = batteryPct;
 
+    // Calculate adaptive sleep interval
+    rtcCurrentInterval = calculateAdaptiveInterval(lidarSuccess ? distanceMm : -1);
+
     // Print summary
     Serial.println(F("\n========================================"));
     Serial.println(F("       SENSOR READING SUMMARY"));
     Serial.println(F("========================================"));
-    if (filteredReading.valid) {
-        Serial.print(F("Raw Distance: "));
-        Serial.print(filteredReading.rawValue);
+    if (lidarSuccess) {
+        Serial.print(F("Distance: "));
+        Serial.print(distanceMm / 10.0f);
         Serial.println(F(" cm"));
-        Serial.print(F("Moving Avg: "));
-        Serial.print(filteredReading.movingAverage);
-        Serial.print(F(" cm ("));
-        Serial.print(filteredReading.maSampleCount);
-        Serial.println(F(" samples)"));
-        Serial.print(F("Kalman Filter: "));
-        Serial.print(filteredReading.kalmanFiltered);
-        Serial.print(F(" cm (+/- "));
-        Serial.print(filteredReading.kalmanUncertainty);
-        Serial.println(F(" cm)"));
-        Serial.print(F("River Level: "));
-        Serial.print(riverLevelCm);
-        Serial.println(F(" cm"));
+        Serial.print(F("Signal Strength: "));
+        Serial.println(signalStrength);
+        Serial.print(F("Sensor Temp: "));
+        Serial.print(sensorTemp);
+        Serial.println(F(" C"));
     } else {
         Serial.println(F("TF02-Pro: ERROR"));
     }
-    Serial.print(F("Signal Strength: "));
-    Serial.println(filteredReading.signalStrength);
-    Serial.print(F("Sensor Temp: "));
-    Serial.print(sensorTemp);
-    Serial.println(F(" C"));
-    Serial.print(F("Ambient Temp: "));
     if (dhtSuccess) {
+        Serial.print(F("Ambient Temp: "));
         Serial.print(ambientTemp);
         Serial.println(F(" C"));
-    } else {
-        Serial.println(F("ERROR"));
-    }
-    Serial.print(F("Humidity: "));
-    if (dhtSuccess) {
+        Serial.print(F("Humidity: "));
         Serial.print(humidity);
         Serial.println(F(" %"));
     } else {
-        Serial.println(F("ERROR"));
+        Serial.println(F("DHT11: ERROR"));
     }
     Serial.print(F("Battery: "));
     Serial.print(batteryPct);
     Serial.println(F("%"));
-    Serial.print(F("Flags: 0x"));
-    Serial.print(sensorData.flags, HEX);
-    if (sensorData.flags & 0x01) Serial.print(F(" [RAPID]"));
-    if (sensorData.flags & 0x02) Serial.print(F(" [CRITICAL]"));
-    if (sensorData.flags & 0x04) Serial.print(F(" [BATT_LOW]"));
-    if (sensorData.flags & 0x10) Serial.print(F(" [KALMAN_OK]"));
-    Serial.println();
+    Serial.print(F("Valid readings: "));
+    Serial.println(sensorData.readingCount);
     Serial.print(F("Next interval: "));
-    Serial.print(currentIntervalSec);
-    Serial.println(F(" sec (adaptive)"));
+    Serial.print(rtcCurrentInterval);
+    Serial.print(F("s ("));
+    Serial.print(rtcCurrentInterval / 60);
+    Serial.println(F(" min)"));
     Serial.println(F("========================================"));
 
-    currentStatus = filteredReading.valid ? STATUS_CONNECTED : STATUS_SENSOR_ERROR;
-    return filteredReading.valid || dhtSuccess;
+    currentStatus = lidarSuccess ? STATUS_CONNECTED : STATUS_SENSOR_ERROR;
+    return lidarSuccess || dhtSuccess;
 }
 
 // ============================================================================
-// Calculate River Level from Distance
+// Calculate Adaptive Sleep Interval based on change rate
 // ============================================================================
-float calculateRiverLevel(float distanceCm) {
-    if (distanceCm >= sensorHeightCm) {
-        return 0.0f;
+uint32_t calculateAdaptiveInterval(int16_t currentDistMm) {
+    // Interval tiers ordered from fastest to slowest
+    static const uint32_t tiers[NUM_INTERVAL_TIERS] = {
+        SLEEP_INTERVAL_RAPID,      // 0: 1 min
+        SLEEP_INTERVAL_FAST,       // 1: 5 min
+        SLEEP_INTERVAL_MODERATE,   // 2: 10 min
+        SLEEP_INTERVAL_SLOW,       // 3: 15 min
+        SLEEP_INTERVAL_VERY_SLOW   // 4: 20 min
+    };
+    static const char* tierLabels[NUM_INTERVAL_TIERS] = {
+        "rapid", "fast", "moderate", "slow", "very slow"
+    };
+
+    // On sensor error, keep current interval unchanged
+    if (currentDistMm <= 0) {
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(rtcCurrentInterval);
+        Serial.println(F("s (kept - sensor error)"));
+        return rtcCurrentInterval;
     }
-    return sensorHeightCm - distanceCm;
+
+    // First valid reading - use default interval
+    if (!rtcHasPreviousReading) {
+        rtcLastDistanceMm = currentDistMm;
+        rtcHasPreviousReading = true;
+        Serial.print(F("Adaptive interval: "));
+        Serial.print(SLEEP_INTERVAL_DEFAULT);
+        Serial.println(F("s (default - first reading)"));
+        return SLEEP_INTERVAL_DEFAULT;
+    }
+
+    // Calculate change from previous reading
+    uint16_t changeMm = abs(currentDistMm - rtcLastDistanceMm);
+    rtcLastDistanceMm = currentDistMm;
+
+    // Determine target tier based on change rate
+    int8_t targetTier;
+    if (changeMm <= CHANGE_THRESHOLD_VERY_SLOW) {
+        targetTier = 4;  // very slow -> 20 min
+    } else if (changeMm <= CHANGE_THRESHOLD_SLOW) {
+        targetTier = 3;  // slow -> 15 min
+    } else if (changeMm <= CHANGE_THRESHOLD_MODERATE) {
+        targetTier = 2;  // moderate -> 10 min
+    } else if (changeMm <= CHANGE_THRESHOLD_FAST) {
+        targetTier = 1;  // fast -> 5 min
+    } else {
+        targetTier = 0;  // rapid -> 1 min
+    }
+
+    // Find current tier index
+    int8_t currentTier = 2;  // default to moderate
+    for (int8_t i = 0; i < NUM_INTERVAL_TIERS; i++) {
+        if (rtcCurrentInterval == tiers[i]) {
+            currentTier = i;
+            break;
+        }
+    }
+
+    // Gradual stepping: only move one tier at a time toward the target
+    int8_t newTier;
+    if (targetTier > currentTier) {
+        newTier = currentTier + 1;  // step slower
+    } else if (targetTier < currentTier) {
+        newTier = currentTier - 1;  // step faster
+    } else {
+        newTier = currentTier;      // stay
+    }
+
+    uint32_t interval = tiers[newTier];
+
+    Serial.print(F("Adaptive interval: "));
+    Serial.print(interval);
+    Serial.print(F("s ("));
+    Serial.print(interval / 60);
+    Serial.print(F(" min) - change: "));
+    Serial.print(changeMm);
+    Serial.print(F("mm ["));
+    Serial.print(tierLabels[newTier]);
+    if (newTier != targetTier) {
+        Serial.print(F(" -> "));
+        Serial.print(tierLabels[targetTier]);
+    }
+    Serial.println(F("]"));
+
+    return interval;
 }
 
 // ============================================================================
-// Calculate Adaptive Sampling Interval
-// Based on Ragnoli et al. (2020) and thesis requirements
-// ============================================================================
-uint32_t calculateAdaptiveInterval(float currentDistCm, float riverLevelCm, uint8_t batteryPct) {
-    Serial.println(F("\n--- Adaptive Interval Calculation ---"));
-
-    // Calculate change from last reading
-    float changeFromLast = abs(currentDistCm - lastDistanceCm);
-    Serial.print(F("  Change from last: "));
-    Serial.print(changeFromLast);
-    Serial.println(F(" cm"));
-    Serial.print(F("  River level: "));
-    Serial.print(riverLevelCm);
-    Serial.println(F(" cm"));
-    Serial.print(F("  Battery: "));
-    Serial.print(batteryPct);
-    Serial.println(F("%"));
-
-    // Priority 1: Battery conservation
-    if (batteryPct < BATTERY_LOW_PERCENT) {
-        Serial.println(F("  -> BATTERY_LOW: Using maximum interval"));
-        return TX_INTERVAL_MAX_SEC;
-    }
-
-    // Priority 2: Rapid change (flood warning)
-    if (changeFromLast >= RAPID_CHANGE_CM) {
-        Serial.println(F("  -> RAPID_CHANGE: Using emergency interval"));
-        return TX_INTERVAL_EMERGENCY;
-    }
-
-    // Priority 3: Critical level
-    if (riverLevelCm >= CRITICAL_LEVEL_CM) {
-        Serial.println(F("  -> CRITICAL_LEVEL: Using minimum interval"));
-        return TX_INTERVAL_MIN_SEC;
-    }
-
-    // Priority 4: Moderate change
-    if (changeFromLast >= CHANGE_THRESHOLD_CM) {
-        float changeRatio = changeFromLast / RAPID_CHANGE_CM;
-        if (changeRatio > 1.0f) changeRatio = 1.0f;
-        uint32_t interval = TX_INTERVAL_NORMAL_SEC -
-            (uint32_t)((TX_INTERVAL_NORMAL_SEC - TX_INTERVAL_MIN_SEC) * changeRatio);
-        Serial.print(F("  -> MODERATE_CHANGE: Using "));
-        Serial.print(interval);
-        Serial.println(F(" sec"));
-        return interval;
-    }
-
-    // Default: Normal interval
-    Serial.println(F("  -> STABLE: Using normal interval"));
-    return TX_INTERVAL_NORMAL_SEC;
-}
-
-// ============================================================================
-// Calculate Median
+// Calculate Median (for robust filtering)
 // ============================================================================
 float calculateMedian(float readings[], uint8_t count) {
     if (count == 0) return 0;
@@ -717,16 +717,39 @@ float calculateMedian(float readings[], uint8_t count) {
 }
 
 // ============================================================================
+// Filter Outliers (based on deviation from median)
+// ============================================================================
+float filterOutliers(float readings[], uint8_t& validCount, float median, float thresholdPct) {
+    float sum = 0;
+    uint8_t filteredIdx = 0;
+
+    float threshold = median * (thresholdPct / 100.0f);
+
+    for (uint8_t i = 0; i < validCount; i++) {
+        float deviation = abs(readings[i] - median);
+
+        if (deviation <= threshold) {
+            sum += readings[i];
+            filteredIdx++;
+        }
+    }
+
+    validCount = filteredIdx;
+
+    if (validCount == 0) {
+        return median;
+    }
+
+    return sum / validCount;
+}
+
+// ============================================================================
 // Get Battery Percentage
 // ============================================================================
 uint8_t getBatteryPercent() {
-    // Heltec V2 has battery voltage divider on GPIO 37
     int adcValue = analogRead(BATTERY_ADC_PIN);
-
-    // Convert ADC reading to voltage (voltage divider divides by 2)
     float voltage = (adcValue / 4095.0f) * 3.3f * 2.0f;
 
-    // Calculate percentage (LiPo: 3.0V empty, 4.2V full)
     if (voltage < 3.0f) return 0;
     if (voltage > 4.2f) return 100;
 
@@ -742,12 +765,10 @@ void enterDeepSleep(uint32_t sleepSeconds) {
     Serial.print(sleepSeconds);
     Serial.println(F(" seconds..."));
 
-    // Save LoRa session to RTC memory before sleep
     saveSession();
 
     Serial.flush();
 
-    // Turn off OLED display
     u8g2.setPowerSave(1);
 
     esp_sleep_enable_timer_wakeup(sleepSeconds * 1000000ULL);
@@ -787,7 +808,6 @@ void saveSession() {
 // Restore LMIC Session from RTC Memory
 // ============================================================================
 bool restoreSession() {
-    // Check if we have valid saved session
     if (rtcSession.magic != RTC_DATA_MAGIC) {
         Serial.println(F("No valid session in RTC memory"));
         return false;
@@ -798,7 +818,6 @@ bool restoreSession() {
         return false;
     }
 
-    // Restore session to LMIC
     LMIC.netid = rtcSession.netid;
     LMIC.devaddr = rtcSession.devaddr;
     memcpy(LMIC.nwkKey, rtcSession.nwkKey, 16);
@@ -809,7 +828,6 @@ bool restoreSession() {
     LMIC.adrTxPow = rtcSession.adrTxPow;
     LMIC.rxDelay = rtcSession.rxDelay;
 
-    // Mark as joined
     LMIC.opmode &= ~OP_JOINING;
 
     return true;
@@ -820,7 +838,7 @@ bool restoreSession() {
 // ============================================================================
 void clearSession() {
     Serial.println(F("Clearing saved session - will rejoin on next boot"));
-    rtcSession.magic = 0;  // Invalidate saved session
+    rtcSession.magic = 0;
     rtcSession.devaddr = 0;
     rtcTxFailCount = 0;
     joinedNetwork = false;
@@ -832,11 +850,9 @@ void clearSession() {
 void updateDisplay() {
     u8g2.clearBuffer();
 
-    // Line 1: Title
     u8g2.setCursor(0, 12);
     u8g2.print("Heltec TF02-Pro");
 
-    // Line 2: Status
     u8g2.setCursor(0, 26);
     switch (currentStatus) {
         case STATUS_INIT:
@@ -856,7 +872,6 @@ void updateDisplay() {
             break;
     }
 
-    // Line 3: Distance
     u8g2.setCursor(0, 40);
     if (lastDistance > 0) {
         char distStr[24];
@@ -870,7 +885,6 @@ void updateDisplay() {
         u8g2.print("AU915 - Waiting");
     }
 
-    // Line 4: Battery or RSSI
     u8g2.setCursor(0, 54);
     uint8_t battery = getBatteryPercent();
     if (battery < 100) {
@@ -927,10 +941,9 @@ void do_send(osjob_t* j) {
     } else {
         Serial.println(F("\n>>> SENDING ERROR PACKET <<<"));
         sensorData.sensorType = 0xFF;
-        sensorData.rawDistanceMm = 0xFFFF;
-        sensorData.maDistanceMm = 0xFFFF;
-        sensorData.kalmanDistanceMm = 0xFFFF;
-        sensorData.flags = 0x08;  // Sensor error flag
+        sensorData.distanceMm = 0xFFFF;
+        sensorData.signalStrength = 0;
+        sensorData.readingCount = 0;
 
         uint8_t result = LMIC_setTxData2(1, (uint8_t*)&sensorData, sizeof(sensorData), 0);
         if (result) {
@@ -1020,13 +1033,15 @@ void onEvent(ev_t ev) {
 
             if (DEEP_SLEEP_ENABLED) {
                 Serial.print(F("Next transmission in "));
-                Serial.print(currentIntervalSec);
-                Serial.println(F(" seconds (adaptive, deep sleep)"));
+                Serial.print(rtcCurrentInterval);
+                Serial.print(F(" seconds ("));
+                Serial.print(rtcCurrentInterval / 60);
+                Serial.println(F(" min, adaptive, deep sleep)"));
             } else {
                 Serial.print(F("Next transmission in "));
-                Serial.print(currentIntervalSec);
+                Serial.print(rtcCurrentInterval);
                 Serial.println(F(" seconds (adaptive)"));
-                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(currentIntervalSec), do_send);
+                os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(rtcCurrentInterval), do_send);
             }
             break;
 
